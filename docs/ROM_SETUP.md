@@ -3,7 +3,8 @@
 **The easy way:** `./build.sh /path/to/propcycl.zip`. It runs
 `tools/setup_roms.py`, which checks every file below by name and size and
 copies them into `extracted/`. The rest of this page is only needed if you
-want to do it by hand.
+want to do it by hand. To check that your files are the same ROMs the games were
+made with, compare their checksums with [ROM_CHECKSUMS.md](ROM_CHECKSUMS.md).
 
 This project does not provide, download, or redistribute game ROMs. Dump
 your own legally obtained Prop Cycle board/set and place the files in a local

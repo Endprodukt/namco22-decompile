@@ -11,6 +11,9 @@ they are not included here.
 | **Tokyo Wars** | 1996 | Playable: attract, play, sound, widescreen | `tokyowar.zip` (+ `namcoc71.zip`, see below) | yes | yes |
 | **Dirt Dash** | 1995 | Playable: five stages, sound, widescreen | `dirtdash.zip` (+ `namcoc71.zip`, see below) | yes | yes |
 
+**Are you running the same ROMs as the authors?** The checksums of every ROM file the games use are in
+[docs/ROM_CHECKSUMS.md](docs/ROM_CHECKSUMS.md), with a list in `md5sum` format for each game.
+
 **`c71.bin`, the DSP BIOS (Rave Racer, Tokyo Wars and Dirt Dash).** These three
 games need one more file, `c71.bin`. In some MAME sets it is already inside the
 game's own zip. In others it is a separate MAME set, **`namcoc71.zip`**. If a
@@ -205,7 +208,8 @@ Press `Esc` and open **Display**. Your choices are saved by themselves.
 ## If it does not work
 
 - **"not installed"**: run `./install-deps.sh` again.
-- **"can't be used"**: the zip is the wrong game or version. Prop Cycle
+- **"can't be used"**: the zip is the wrong game or version (compare your files with
+  [docs/ROM_CHECKSUMS.md](docs/ROM_CHECKSUMS.md)). Prop Cycle
   needs the one called `propcycl`; Rave Racer needs `raverace` and
   `namcoc74`; Tokyo Wars needs `tokyowar`; Dirt Dash needs `dirtdash`.
 - **"c71.bin is missing"** (Rave Racer, Tokyo Wars, Dirt Dash): the DSP BIOS is
