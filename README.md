@@ -188,6 +188,10 @@ Prop Cycle:
 ![Prop Cycle: gameplay, over the river](docs/images/propcycle-gameplay.png)
 ![The title screen](docs/images/attract-title.png)
 
+Dirt Dash:
+
+![Dirt Dash: a race in widescreen](docs/images/dirtdash-gameplay.png)
+
 Tokyo Wars, the title screen:
 
 ![Tokyo Wars: the title screen](docs/images/tokyowar-title.png)
