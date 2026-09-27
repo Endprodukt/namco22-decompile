@@ -48,6 +48,8 @@ void eng_ui_draw(bool *quit);
 void eng_ui_set_hint(const char *text, int frames);       /* a one-line hint at the bottom of the window for `frames` frames while the menu is closed */                            /* over the picture, into the window, before the swap */
 /* the next key press is handed to cb (SDL_SCANCODE_UNKNOWN if cancelled with Esc): a key-binding row's "press a key" */
 void eng_ui_capture_key(void (*cb)(SDL_Scancode sc, void *u), void *u);
+/* Capture any input; return true when complete. NULL cancels on menu close. */
+void eng_ui_capture_input(bool (*cb)(const SDL_Event *e, void *u), void *u);
 bool eng_ui_capturing(void);
 void eng_ui_goto(int page, int row);                     /* tests */
 void eng_ui_nav(char k);                                 /* tests: u d l r o(k) b(ack) n(ext page) p(revious page) */

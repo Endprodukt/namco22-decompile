@@ -14,7 +14,7 @@
 
 static const ss22_input_game *game;
 static SDL_Scancode bound[MAX_ACTIONS];
-static int rebinding = -1;                       /* action waiting for a keyboard key, or -1 */
+static int rebinding = -1;                       /* action waiting for a key, button or axis, or -1 */
 static bool test_latch, test_prev[MAX_ACTIONS];
 static int service_frames;
 
@@ -55,6 +55,7 @@ static raw_axis_bind joy_steer = { 0, false, 0, "" };
 static raw_axis_bind joy_gas   = { -1, false, 0, "" };
 static raw_axis_bind joy_brake = { -1, false, 0, "" };
 static int joy_button[MAX_ACTIONS];
+static char joy_button_guid[MAX_ACTIONS][40];
 static raw_dev raws[MAX_DEV];
 static pedal_cal gas_cal, brake_cal;
 
@@ -87,8 +88,16 @@ static void raw_bindings_load(void)
     }
     for (int a = 0; a < MAX_ACTIONS; a++) joy_button[a] = -1;
     for (int a = 0; a < game->n && a < MAX_ACTIONS; a++) {
-        char k[64]; snprintf(k, sizeof k, "joy_%s", game->actions[a].key);
+        char k[64]; snprintf(k, sizeof k, "joy_button_%s", game->actions[a].key);
         joy_button[a] = eng_cfg_int(k, -1);
+        /* Legacy button keys overlap joy_gas/joy_brake axis settings. */
+        if (!eng_cfg_get(k) && game->actions[a].axis == SS22_AX_NONE) {
+            snprintf(k, sizeof k, "joy_%s", game->actions[a].key);
+            joy_button[a] = eng_cfg_int(k, -1);
+        }
+        snprintf(k, sizeof k, "joy_button_%s_guid", game->actions[a].key);
+        const char *guid = eng_cfg_get(k);
+        snprintf(joy_button_guid[a], sizeof joy_button_guid[a], "%s", guid ? guid : "");
     }
 }
 
@@ -128,13 +137,6 @@ static bool key_held(const uint8_t *k, int a)
 {
     const SDL_Scancode alt = game->actions[a].alt;
     return k[bound[a]] || (alt != SDL_SCANCODE_UNKNOWN && k[alt]);
-}
-
-static void on_key(SDL_Scancode sc, void *u)
-{
-    const int a = (int)(intptr_t)u;
-    rebinding = -1;
-    if (sc != SDL_SCANCODE_UNKNOWN) binding_set(a, sc);
 }
 
 /* ---- controller / raw-device discovery ---------------------------------- */
@@ -209,43 +211,47 @@ static int raw_slot_for(const raw_axis_bind *b)
     return -1;
 }
 
+/* Explicit button bindings also accept standard game controllers. */
+static SDL_Joystick *button_device(SDL_JoystickID id)
+{
+    int d = raw_find(id);
+    if (d >= 0) return raws[d].js;
+    d = pad_find(id);
+    return d >= 0 ? SDL_GameControllerGetJoystick(pads[d].gc) : NULL;
+}
+
+static bool button_matches(SDL_Joystick *js, int a)
+{
+    if (!js || joy_button[a] >= SDL_JoystickNumButtons(js)) return false;
+    if (joy_button_guid[a][0]) {
+        char guid[40];
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), guid, sizeof guid);
+        if (strcmp(guid, joy_button_guid[a])) return false;
+    }
+    return SDL_JoystickGetButton(js, joy_button[a]) != 0;
+}
+
 static bool raw_button_held(int a)
 {
     if (a < 0 || a >= game->n || joy_button[a] < 0) return false;
-    for (int i = 0; i < MAX_DEV; i++)
-        if (raws[i].js && joy_button[a] < SDL_JoystickNumButtons(raws[i].js) &&
-            SDL_JoystickGetButton(raws[i].js, joy_button[a])) return true;
+    for (int i = 0; i < MAX_DEV; i++) {
+        if (button_matches(raws[i].js, a)) return true;
+        if (pads[i].gc && button_matches(SDL_GameControllerGetJoystick(pads[i].gc), a)) return true;
+    }
     return false;
 }
 
 /* ---- Controls menu ------------------------------------------------------- */
-static bool game_has_axis(int kind)
+static int action_axis(int a)
 {
-    for (int a = 0; a < game->n; a++) {
-        const int x = game->actions[a].axis;
-        if (kind == 0 && (x == SS22_AX_WHEEL_LEFT || x == SS22_AX_WHEEL_RIGHT)) return true;
-        if (kind == 1 && x == SS22_AX_PEDAL1) return true;
-        if (kind == 2 && x == SS22_AX_PEDAL2) return true;
+    switch (game->actions[a].axis) {
+    case SS22_AX_WHEEL_LEFT: case SS22_AX_WHEEL_RIGHT: return 0;
+    case SS22_AX_PEDAL1: return 1;
+    case SS22_AX_PEDAL2: return 2;
+    default: return -1;
     }
-    return false;
 }
-
-static int axis_rows(void)
-{
-    int n = 0;
-    for (int k = 0; k < 3; k++) if (game_has_axis(k)) n++;
-    return n;
-}
-
-static int axis_kind_from_row(int r)
-{
-    int n = 0;
-    for (int k = 0; k < 3; k++) if (game_has_axis(k)) {
-        if (n == r) return k;
-        n++;
-    }
-    return -1;
-}
+static bool capture_input(const SDL_Event *e, void *u);
 
 static void axis_capture_begin(int kind)
 {
@@ -268,13 +274,12 @@ static void axis_label(int kind, char *v, size_t vn)
     }
     const raw_axis_bind *b = axis_bind(kind);
     if (b->axis < 0) { snprintf(v, vn, "(not bound)"); return; }
-    const int d = raw_slot_for(b);
-    if (d >= 0) snprintf(v, vn, "%s / axis %d%s", raws[d].name, b->axis, b->invert ? " (inv)" : "");
-    else snprintf(v, vn, "axis %d%s", b->axis, b->guid[0] ? " (device disconnected)" : "");
+    snprintf(v, vn, "axis %d%s%s", b->axis, b->invert ? " (inv)" : "",
+             raw_slot_for(b) < 0 && b->guid[0] ? " (disconnected)" : "");
 }
 
 static int nsw(void) { return (game->test_bit ? 1 : 0) + (game->service_bit ? 1 : 0); }
-static int pg_n(void) { return nsw() + 1 + axis_rows() + game->n; }
+static int pg_n(void) { return nsw() + 1 + game->n; }
 static bool pg_val(int r) { (void)r; return false; }
 
 static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
@@ -285,17 +290,25 @@ static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
     r -= nsw();
     if (r == 0) { snprintf(l, ln, "Reset keyboard defaults"); return; }
     r--;
-    const int ar = axis_rows();
-    if (r < ar) {
-        const int k = axis_kind_from_row(r);
-        snprintf(l, ln, "%s axis", k == 0 ? "Wheel" : k == 1 ? "Gas" : "Brake");
-        axis_label(k, v, vn);
+    const int a = r;
+    snprintf(l, ln, "%s", game->actions[a].label);
+    if (rebinding == a) {
+        snprintf(v, vn, "%s", action_axis(a) >= 0 ? "key, button or move control..." : "press key or button...");
         return;
     }
-    const int a = r - ar;
-    snprintf(l, ln, "%s", game->actions[a].label);
-    const char *k = rebinding == a ? "press a key..." : SDL_GetScancodeName(bound[a]);
-    snprintf(v, vn, "%s", (k && *k) ? k : "(none)");
+    const char *key = SDL_GetScancodeName(bound[a]);
+    snprintf(v, vn, "%s", key && *key ? key : "(none)");
+    if (joy_button[a] >= 0) {
+        size_t used = strlen(v);
+        snprintf(v + used, vn - used, " / button %d", joy_button[a]);
+    }
+    const int kind = action_axis(a);
+    if (kind >= 0 && axis_bind(kind)->axis >= 0) {
+        char label[128];
+        axis_label(kind, label, sizeof label);
+        size_t used = strlen(v);
+        snprintf(v + used, vn - used, " / %s", label);
+    }
 }
 
 static void pg_change(int r, int dir)
@@ -309,22 +322,17 @@ static void pg_change(int r, int dir)
         return;
     }
     r--;
-    const int ar = axis_rows();
-    if (r < ar) {
-        const int k = axis_kind_from_row(r);
-        axis_capture_begin(k);
-        return;
-    }
-    rebinding = r - ar;
-    axis_capture = -1;
-    eng_ui_capture_key(on_key, (void *)(intptr_t)rebinding);
+    rebinding = r;
+    axis_capture_begin(action_axis(r));
+    eng_ui_capture_input(capture_input, NULL);
 }
 
 static void pg_notes(void (*line)(const char *fmt, ...))
 {
-    line("Wheel/pedals: select an axis row, then move that control.");
+    line("Select an action, then press a key/button or move its control.");
+    line("Esc cancels. Wheel left/right share one axis binding.");
     line("Pedal direction is learned automatically and saved.");
-    for (int i = 0; i < 3; i++) if (game->notes[i]) line("%s", game->notes[i]);
+    for (int i = 1; i < 3; i++) if (game->notes[i]) line("%s", game->notes[i]);
 }
 
 static const eng_ui_page controls_page = { "Controls", 520, 170, 22, pg_n, pg_val, NULL, pg_text, pg_change, pg_notes };
@@ -354,16 +362,47 @@ void ss22_input_event(const SDL_Event *e)
         memset(&gas_cal, 0, sizeof gas_cal); memset(&brake_cal, 0, sizeof brake_cal);
     }
 
-    if (axis_capture < 0 || e->type != SDL_JOYAXISMOTION) return;
+}
+
+/* UI capture consumes the binding event before it can navigate the menu. */
+static bool capture_input(const SDL_Event *e, void *u)
+{
+    (void)u;
+    if (!e || (e->type == SDL_KEYDOWN && e->key.keysym.scancode == SDL_SCANCODE_ESCAPE)) {
+        rebinding = axis_capture = -1;
+        return true;
+    }
+    if (e->type == SDL_KEYDOWN && !e->key.repeat) {
+        binding_set(rebinding, e->key.keysym.scancode);
+        rebinding = axis_capture = -1;
+        return true;
+    }
+    if (e->type == SDL_JOYBUTTONDOWN) {
+        SDL_Joystick *js = button_device(e->jbutton.which);
+        if (!js) return false;
+        joy_button[rebinding] = e->jbutton.button;
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), joy_button_guid[rebinding],
+                                 sizeof joy_button_guid[rebinding]);
+        char key[64];
+        snprintf(key, sizeof key, "joy_button_%s", game->actions[rebinding].key);
+        eng_cfg_set_int(key, joy_button[rebinding]);
+        snprintf(key, sizeof key, "joy_button_%s_guid", game->actions[rebinding].key);
+        eng_cfg_set(key, joy_button_guid[rebinding]);
+        rebinding = axis_capture = -1;
+        return true;
+    }
+    if (axis_capture < 0 || e->type != SDL_JOYAXISMOTION) return false;
     const int d = raw_find(e->jaxis.which);
     const int a = e->jaxis.axis;
-    if (d < 0 || a < 0 || a >= MAX_CAP_AXES || !cap_valid[d][a]) return;
+    if (d < 0 || a < 0 || a >= MAX_CAP_AXES || !cap_valid[d][a]) return false;
     const int delta = (int)e->jaxis.value - cap_base[d][a];
-    if (abs(delta) < 6000) return;
+    if (abs(delta) < 6000) return false;
 
     raw_axis_bind *b = axis_bind(axis_capture);
     b->axis = a;
-    b->invert = false;
+    b->invert = axis_capture == 0 &&
+        ((game->actions[rebinding].axis == SS22_AX_WHEEL_LEFT && delta > 0) ||
+         (game->actions[rebinding].axis == SS22_AX_WHEEL_RIGHT && delta < 0));
     b->direction = axis_capture == 0 ? 0 : (delta > 0 ? +1 : -1);
     snprintf(b->guid, sizeof b->guid, "%s", raws[d].guid);
     raw_bind_save(axis_capture);
@@ -372,7 +411,8 @@ void ss22_input_event(const SDL_Event *e)
     fprintf(stderr, "[INPUT] %s bound to %s axis %d%s\n",
             axis_capture == 0 ? "wheel" : axis_capture == 1 ? "gas" : "brake",
             raws[d].name, a, b->direction > 0 ? " (+)" : b->direction < 0 ? " (-)" : "");
-    axis_capture = -1;
+    rebinding = axis_capture = -1;
+    return true;
 }
 
 static unsigned ramp(unsigned v, unsigned target, unsigned step)
