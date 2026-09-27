@@ -35,6 +35,7 @@
 #include "rr_gl.h"
 #include "render_target.h"
 #include "eng_gl.h"
+#include "gl_warn.h"
 extern int g_rr_gl;     /* rr_main.c: 1 = the engine's GL renderer, 0 = the software oracle */
 
 /* ---- controllers ----------------------------------------------------------
@@ -342,6 +343,7 @@ bool rr_host_open(int scale)
     fprintf(stderr, "[HOST] OpenGL: %s (%s renderer)\n", (const char *)glGetString(GL_RENDERER),
             g_rr_gl ? "engine" : "software oracle");
     fprintf(stderr, "[HOST] display %d Hz, %s\n", hz, vsync ? "vsync" : "timer-paced at 59.906 Hz");
+    eng_gl_warn_software((const char *)glGetString(GL_RENDERER));
     tex_bake_window_defaults();      /* a per-frame budget for cold texture bakes: a new scene sharpens over a few frames instead of one long one (ENG_TEX_BUDGET) */
 
     tex_w = 640; tex_h = 480;

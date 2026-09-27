@@ -37,7 +37,7 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/gen/tw_c25.c
   COMMAND ${Python3_EXECUTABLE} ../tools/gen/c25_translate.py --game tw --roms extracted
           --cov tools/gen/c25.cov --out gen/tw_c25.c --func tw_c25_exec
-  DEPENDS ../tools/gen/c25_translate.py tools/gen/c25.cov
+  DEPENDS ../tools/gen/c25_translate.py tools/gen/c25.cov ../engine/c25/c71_bios.inc
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMENT "Translating the master DSP program to C")
 set_source_files_properties(gen/tw_c25.c PROPERTIES COMPILE_OPTIONS "-O1;-w")

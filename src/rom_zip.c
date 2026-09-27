@@ -35,7 +35,6 @@ static const struct { const char *name; uint32_t size; int opt; } k_roms[] = {
     {"pr1scg0.12f", 0x200000}, {"pr1scg1.10f", 0x200000},
     {"pr1data.8k", 0x80000},
     {"pr1wavea.2l", 0x400000}, {"pr1waveb.1l", 0x400000},
-    {"c71.bin", 0x2000, 1},
 };
 #define NROMS ((int)(sizeof k_roms / sizeof k_roms[0]))
 

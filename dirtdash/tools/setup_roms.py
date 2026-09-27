@@ -21,7 +21,6 @@ import zipfile
 # name -> size in bytes. Program chips are looked up as dirtdasha/<name> in the
 # zip (the Japanese set's dt1vera.* sit under dirtdashj/ and are NOT this game).
 REQUIRED = {
-    "c71.bin": 0x2000,
     "dt1ccrh.1d": 0x80000,
     "dt1ccrl.3d": 0x200000,
     "dt1cg0.8d": 0x200000,
@@ -50,6 +49,7 @@ REQUIRED = {
     "dt2vera.2": 0x200000,
 }
 PROGRAM_DIR = "dirtdasha/"
+PROGRAM_CHIPS = ("dt2vera.1", "dt2vera.2")
 OPTIONAL = {}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -65,22 +65,27 @@ def have_complete(folder):
 
 
 def from_zip(path):
-    """name -> bytes for every wanted file in the zip: top-level chips, plus the
-    two program chips from dirtdasha/ (not dirtdashj/, dirtdasha's Japanese sibling)."""
-    found = {}
+    """name -> bytes for every wanted file in the zip: top-level chips, plus the two program chips (dt2vera.1/.2). Those are taken from dirtdasha/ first
+    (MAME's World DT2 Ver.A set), else from the top level, else from any other folder -- a split set's own dirtdasha.zip, or a zip made by hand, has them
+    there. The Japanese set (dirtdashj/) has differently named chips (dt1vera.*), so it is never picked up by mistake."""
+    found, rank = {}, {}
     with zipfile.ZipFile(path) as z:
         for info in z.infolist():
             if info.is_dir():
                 continue
-            fn = info.filename.lower().strip("/")
-            if "/" in fn:
-                if not fn.startswith(PROGRAM_DIR):
-                    continue
-                fn = fn[len(PROGRAM_DIR):]
-                if "/" in fn:
-                    continue
-            if fn in REQUIRED or fn in OPTIONAL:
-                found[fn] = z.read(info)
+            fn = info.filename.replace("\\", "/").lower().strip("/")
+            base = fn.rsplit("/", 1)[-1]
+            if base not in REQUIRED and base not in OPTIONAL:
+                continue
+            if fn == base or fn == PROGRAM_DIR + base:
+                r = 2 if fn == PROGRAM_DIR + base or base not in PROGRAM_CHIPS else 1
+            elif base in PROGRAM_CHIPS:
+                r = 0                                    # the program chip in some other folder
+            else:
+                continue                                 # any other chip in a sub-folder is another set's
+            if r > rank.get(base, -1):
+                found[base] = z.read(info)
+                rank[base] = r
     return found
 
 
@@ -94,7 +99,7 @@ def from_folder(path):
     if not all(n in found for n in REQUIRED):
         # A folder that holds the zip rather than the chips.
         for entry in sorted(os.listdir(path)):
-            if entry.lower() in ("dirtdash.zip", "namcoc71.zip"):
+            if entry.lower() in ("dirtdash.zip", "dirtdasha.zip"):
                 found.update(from_zip(os.path.join(path, entry)))
     return found
 
@@ -138,9 +143,6 @@ def main():
             print(f"  missing:        {n}")
         for n in wrong:
             print(f"  wrong size:     {n} ({len(found[n])} bytes, expected {REQUIRED[n]})")
-        if "c71.bin" in missing:
-            print("  c71.bin is the C71 DSP BIOS. Some MAME sets carry it inside the game's zip; others keep it in a separate")
-            print("  'namcoc71.zip' -- add that zip to this command (it can be listed after the game's zip).")
         print("You need MAME's Dirt Dash set 'dirtdash' (with the World DT2 Ver.A program, 'dirtdasha').")
         return 1
 

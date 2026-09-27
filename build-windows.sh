@@ -8,7 +8,7 @@
 # comes with Windows and the GPU driver), an empty roms/ folder and
 # HOW TO PLAY.txt -- plus windows-release.zip.
 # On Windows: put the MAME ROM sets in roms/ (propcycl.zip for Prop Cycle;
-# raverace.zip + namcoc74.zip for Rave Racer; tokyowar.zip for Tokyo Wars; dirtdash.zip for Dirt Dash; namcoc71.zip too if a game says c71.bin is missing) and
+# raverace.zip + namcoc74.zip for Rave Racer; tokyowar.zip for Tokyo Wars; dirtdash.zip for Dirt Dash) and
 # double-click the game. The
 # first start unpacks the ROMs into extracted/ beside it.
 #
@@ -104,6 +104,7 @@ REL="$TOP/windows-release"
 rm -rf "$REL" "$TOP/windows-release.zip" "$TOP/dist"
 mkdir -p "$REL"
 cp -r "$TOP/packaging/windows/." "$REL/"
+cp "$TOP/LICENSE" "$REL/LICENSE.txt"
 cp build-win/cmake/propcycl.exe "$REL/PropCycle.exe"
 cp build-win/rr/rr.exe "$REL/RaveRacer.exe"
 cp build-win/tw/tw.exe "$REL/TokyoWars.exe"

@@ -19,16 +19,15 @@ Get-FileHash -Algorithm MD5 *
 (or `certutil -hashfile <file> MD5` for one file), and compare with the table. The **CRC32** column is the one MAME's own
 ROM lists show.
 
-`c71.bin` (the DSP BIOS) is the same file in all four games' sets. It comes from the game's zip, or, in MAME sets that keep it
-apart, from `namcoc71.zip`. Rave Racer's `c74.bin` (the sound chip's BIOS) comes from `namcoc74.zip`.
+Rave Racer's `c74.bin` (the sound chip's BIOS) comes from `namcoc74.zip`. The DSP's BIOS, `c71.bin` (MAME's `namcoc71`), is built into all four games and
+is not needed; if you have it, its MD5 is `223914888d9be9ffe07952d9aa4c4107` (CRC32 `47c623ab`).
 
 ## Prop Cycle
 
-MAME set: `propcycl` (World, PR2 Ver.A). Unpacked chips end up in `extracted/`. 29 files.
+MAME set: `propcycl` (World, PR2 Ver.A). Unpacked chips end up in `extracted/`. 28 files.
 
 | File | Size | MD5 | CRC32 |
 |---|---:|---|---|
-| `c71.bin` | 8192 | `223914888d9be9ffe07952d9aa4c4107` | `47c623ab` |
 | `pr1ccrh.1d` | 524288 | `a857f962142f0fd127a825545e5ad318` | `1d68bc31` |
 | `pr1ccrl.3d` | 2097152 | `df470abb93c504bc0bebf375e5c2610b` | `e01321fd` |
 | `pr1cg0.12b` | 2097152 | `0ed6948004a1908bde046675719a08b7` | `0a041238` |
@@ -60,11 +59,10 @@ MAME set: `propcycl` (World, PR2 Ver.A). Unpacked chips end up in `extracted/`. 
 
 ## Rave Racer
 
-MAME set: `raverace` (World, RV2 Ver.B) and `namcoc74`. Unpacked chips end up in `raverace/extracted/`. 37 files.
+MAME set: `raverace` (World, RV2 Ver.B) and `namcoc74`. Unpacked chips end up in `raverace/extracted/`. 36 files.
 
 | File | Size | MD5 | CRC32 |
 |---|---:|---|---|
-| `c71.bin` | 8192 | `223914888d9be9ffe07952d9aa4c4107` | `47c623ab` |
 | `c74.bin` | 16384 | `c78a2c4d6071a227e6d49bc009ef7600` | `a3dce360` |
 | `rr1gam.2d` | 256 | `8554aa5b8d9b2bfac5222d3391de25f0` | `b2161bce` |
 | `rr1gam.3d` | 256 | `8554aa5b8d9b2bfac5222d3391de25f0` | `b2161bce` |
@@ -104,11 +102,10 @@ MAME set: `raverace` (World, RV2 Ver.B) and `namcoc74`. Unpacked chips end up in
 
 ## Tokyo Wars
 
-MAME set: `tokyowar` (World, TW2 Ver.A). Unpacked chips end up in `tokyowar/extracted/`. 34 files.
+MAME set: `tokyowar` (World, TW2 Ver.A). Unpacked chips end up in `tokyowar/extracted/`. 33 files.
 
 | File | Size | MD5 | CRC32 |
 |---|---:|---|---|
-| `c71.bin` | 8192 | `223914888d9be9ffe07952d9aa4c4107` | `47c623ab` |
 | `tokyowar_defaults.nv` | 8192 | `e84f6a0ad1bc545d6783d89587337515` | `e8bd7d09` |
 | `tw1ccrh.1d` | 524288 | `28fc6d58ba0ca37c3cf3727717d71613` | `ad17e693` |
 | `tw1ccrl.3d` | 2097152 | `1e3143cd9728b392f786512616e8982f` | `d08f5794` |
@@ -145,11 +142,10 @@ MAME set: `tokyowar` (World, TW2 Ver.A). Unpacked chips end up in `tokyowar/extr
 
 ## Dirt Dash
 
-MAME set: `dirtdash` (World, DT2 Ver.A, MAME's `dirtdasha`). Unpacked chips end up in `dirtdash/extracted/`. 27 files.
+MAME set: `dirtdash` (World, DT2 Ver.A, MAME's `dirtdasha`). Unpacked chips end up in `dirtdash/extracted/`. 26 files.
 
 | File | Size | MD5 | CRC32 |
 |---|---:|---|---|
-| `c71.bin` | 8192 | `223914888d9be9ffe07952d9aa4c4107` | `47c623ab` |
 | `dt1ccrh.1d` | 524288 | `5acabd9bead8907cc8b9da4577e37fbf` | `af257064` |
 | `dt1ccrl.3d` | 2097152 | `677daaf8a0483c40835d326d46879300` | `e536b313` |
 | `dt1cg0.8d` | 2097152 | `65fbe1567cbb9bf2ff5f32fce0116b5b` | `10ab95e0` |

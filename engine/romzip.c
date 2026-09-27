@@ -31,15 +31,32 @@ const char *eng_romzip_missing(const char *dir, const eng_rom_t *k_roms, int NRO
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t rd32(const uint8_t *p) { return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24; }
 
-static int rom_index(const char *name, size_t len, const eng_rom_t *k_roms, int NROMS)
+/* why a chip that WAS in a zip was not taken, so "still missing X" can say what is actually wrong with X (the last rejection is kept) */
+static char g_why_chip[48], g_why[240];
+#define WHY(chip, ...) do { snprintf(g_why_chip, sizeof g_why_chip, "%s", (chip)); snprintf(g_why, sizeof g_why, __VA_ARGS__); } while (0)
+
+static bool path_is(const char *name, size_t len, const char *want)      /* the zip entry `name` equals the (lower-case) path `want`, ignoring case */
+{
+    size_t n = strlen(want);
+    if (n != len) return false;
+    for (size_t k = 0; k < n; k++) if (tolower((unsigned char)name[k]) != want[k]) return false;
+    return true;
+}
+
+/* Which chip is this zip entry, and how well does its place in the zip fit: rank 2 = the path the chip is expected at, 1 = the top level, 0 = the same
+ * file name in some other folder (only for a chip that names a zip path). A MAME set keeps a program set under its own name (dirtdasha/dt2vera.1), but a
+ * split set, a zip somebody made by hand or one packed with backslashes does not -- and the Japanese sets carry differently NAMED chips, so the
+ * name alone never picks a wrong program. -1 = not a chip this game needs. */
+static int rom_index(const char *name, size_t len, const eng_rom_t *k_roms, int NROMS, int *rank)
 {
     for (int i = 0; i < NROMS; i++) {
         const char *want = k_roms[i].zname ? k_roms[i].zname : k_roms[i].name;     /* the entry's full path */
-        size_t n = strlen(want);
-        if (n != len) continue;
-        size_t k = 0;
-        while (k < n && tolower((unsigned char)name[k]) == want[k]) k++;
-        if (k == n) return i;
+        if (path_is(name, len, want)) { *rank = 2; return i; }
+        if (!k_roms[i].zname) continue;
+        if (path_is(name, len, k_roms[i].name)) { *rank = 1; return i; }
+        size_t b = len;
+        while (b > 0 && name[b - 1] != '/' && name[b - 1] != '\\') b--;
+        if (b > 0 && path_is(name + b, len - b, k_roms[i].name)) { *rank = 0; return i; }
     }
     return -1;
 }
@@ -53,9 +70,12 @@ int eng_romzip_extract(const char *zip_path, const char *dest_dir, const eng_rom
     uint8_t *z = NULL, *out = NULL;
     long zn;
     int ok = -1;
-    int *got = calloc((size_t)NROMS, sizeof *got);
-    if (!got) return -1;
-    if (!f) { snprintf(err, errlen, "cannot open %s", zip_path); free(got); return -1; }
+    int *got = calloc((size_t)NROMS, sizeof *got), *best = malloc((size_t)NROMS * sizeof *best);
+    if (!got || !best) { free(got); free(best); return -1; }
+    for (int i = 0; i < NROMS; i++) best[i] = -1;
+    const char *zbase = zip_path;
+    for (const char *c = zip_path; *c; c++) if (*c == '/' || *c == '\\') zbase = c + 1;
+    if (!f) { snprintf(err, errlen, "cannot open %s", zip_path); free(got); free(best); return -1; }
     fseek(f, 0, SEEK_END); zn = ftell(f); fseek(f, 0, SEEK_SET);
     if (zn < 22 || !(z = malloc((size_t)zn)) || fread(z, 1, (size_t)zn, f) != (size_t)zn) {
         snprintf(err, errlen, "cannot read %s", zip_path);
@@ -79,9 +99,14 @@ int eng_romzip_extract(const char *zip_path, const char *dest_dir, const eng_rom
         uint16_t nlen = rd16(z + p + 28), xlen = rd16(z + p + 30), clen = rd16(z + p + 32);
         uint32_t lho = rd32(z + p + 42);
         const char *name = (const char *)(z + p + 46);
-        int idx = rom_index(name, nlen, k_roms, NROMS);
+        int rank = -1;
+        int idx = rom_index(name, nlen, k_roms, NROMS, &rank);
         p += 46 + nlen + xlen + clen;
-        if (idx < 0 || usize != k_roms[idx].size) continue;
+        if (idx < 0 || rank <= best[idx]) continue;                  /* not ours, or a better-placed copy is already taken */
+        if (usize != k_roms[idx].size) {
+            WHY(k_roms[idx].name, "\"%.*s\" in %s is %u bytes, not the %u bytes this game uses (a different or damaged dump)", (int)nlen, name, zbase, usize, k_roms[idx].size);
+            continue;
+        }
         if ((long)lho + 30 > zn || rd32(z + lho) != 0x04034b50) continue;
         uint32_t data = lho + 30 + rd16(z + lho + 26) + rd16(z + lho + 28);
         if ((long)data + csize > zn) continue;
@@ -98,11 +123,18 @@ int eng_romzip_extract(const char *zip_path, const char *dest_dir, const eng_rom
             s.next_out = out;     s.avail_out = usize;
             int r = inflate(&s, Z_FINISH);
             inflateEnd(&s);
-            if (r != Z_STREAM_END || s.total_out != usize) continue;
+            if (r != Z_STREAM_END || s.total_out != usize) {
+                WHY(k_roms[idx].name, "\"%.*s\" in %s cannot be decompressed (the zip is damaged)", (int)nlen, name, zbase);
+                continue;
+            }
         } else {
+            WHY(k_roms[idx].name, "\"%.*s\" in %s is compressed with method %u, which this program cannot read (re-zip it with ordinary Deflate or Store)", (int)nlen, name, zbase, (unsigned)method);
             continue;
         }
-        if (crc32(0L, out, usize) != rd32(z + hdr + 16)) continue;
+        if (crc32(0L, out, usize) != rd32(z + hdr + 16)) {
+            WHY(k_roms[idx].name, "\"%.*s\" in %s fails its checksum (the zip is damaged)", (int)nlen, name, zbase);
+            continue;
+        }
 
         char path[1024];
         snprintf(path, sizeof path, "%s/%s", dest_dir, k_roms[idx].name);
@@ -113,13 +145,14 @@ int eng_romzip_extract(const char *zip_path, const char *dest_dir, const eng_rom
             goto done;
         }
         fclose(o);
-        got[idx] = 1;
+        got[idx] = 1; best[idx] = rank;
     }
 
     ok = 0;
     for (int i = 0; i < NROMS; i++) ok += got[i];
 done:
     free(got);
+    free(best);
     free(out);
     free(z);
     fclose(f);
@@ -143,6 +176,7 @@ bool eng_romzip_autosetup(const char *rom_dir, const char *exe_dir, const char *
 {
     char path[1024];
     int found = 0;
+    g_why_chip[0] = 0;
     for (int z = 0; z < nzips; z++) {
         if (!find_zip(zips[z], exe_dir, path, sizeof path)) continue;
         found++;
@@ -152,8 +186,13 @@ bool eng_romzip_autosetup(const char *rom_dir, const char *exe_dir, const char *
     const char *miss = eng_romzip_missing(rom_dir, roms, n);
     if (!miss) { printf("ROMs unpacked.\n"); return true; }
     if (!found) snprintf(err, errlen, "no %s found", zips[0]);
-    else if (!strcmp(miss, "c71.bin"))
-        snprintf(err, errlen, "c71.bin (the C71 DSP BIOS) is not in %s -- some MAME sets keep it in namcoc71.zip: put namcoc71.zip in the roms folder too", zips[0]);
-    else snprintf(err, errlen, "still missing %s -- the MAME set %s is needed", miss, zips[0]);
+    else if (!strcmp(g_why_chip, miss)) snprintf(err, errlen, "%s cannot be used: %s", miss, g_why);
+    else {
+        char belongs[160] = "at the top level of the zip";
+        for (int i = 0; i < n; i++)
+            if (!strcmp(roms[i].name, miss) && roms[i].zname) snprintf(belongs, sizeof belongs, "at %s, or anywhere else in the zip", roms[i].zname);
+        snprintf(err, errlen, "still missing %s -- no file of that name in %s (it belongs %s); if your MAME set keeps it in a separate zip, put that zip "
+                 "in the roms folder too (docs/ROM_CHECKSUMS.md lists the files this game uses)", miss, zips[0], belongs);
+    }
     return false;
 }

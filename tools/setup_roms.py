@@ -31,7 +31,7 @@ REQUIRED = {
     "pr1wavea.2l": 0x400000, "pr1waveb.1l": 0x400000,
 }
 # Nice to have; the game runs without it.
-OPTIONAL = {"c71.bin": 0x2000}
+OPTIONAL = {}
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEST = os.path.join(os.path.dirname(HERE), "extracted")

@@ -6,7 +6,7 @@
  * sound programs are translated at build time (gen/dd_c25.c, gen/dd_snd_driver.c).
  *
  * The ROM chip list is tools/setup_roms.py's REQUIRED (World, DT2 Ver.A): names and sizes, checked before anything is written.
- * dirtdash.zip is the whole set (the sound BIOS c71.bin included); the program is its dirtdasha/ sub-folder (World DT2 Ver.A), NOT
+ * dirtdash.zip is the whole set (the DSP BIOS, c71.bin, is built into the engine: engine/c25/c71_bios.c); the program is its dirtdasha/ sub-folder (World DT2 Ver.A), NOT
  * dirtdashj/ (Japan).
  */
 #include <stdio.h>
@@ -19,7 +19,6 @@
 bool dd_c25_exec(c71_t *d, int pc);          /* gen/dd_c25.c */
 
 static const eng_rom_t k_roms[] = {
-    {"c71.bin", 0x2000},
     {"dt1ccrh.1d", 0x80000},
     {"dt1ccrl.3d", 0x200000},
     {"dt1cg0.8d", 0x200000},
@@ -183,6 +182,7 @@ static bool start(const char *name, long n, uint16_t *p, unsigned *wheel, unsign
 static void autoplay(long n, uint16_t *p, unsigned *wheel, unsigned *gas, unsigned *brake)
 {
     const long m = n % 3600;
+    const uint16_t keep = *p;                                                /* the --press bits, which arrive in *p */
     static int test = -1;
     if (test < 0) { const char *e = getenv("DD_AUTOPLAY"); test = e && !strcmp(e, "test"); }
     if (test) { autoplay_test(n, p, wheel, gas, brake); return; }
@@ -195,7 +195,7 @@ static void autoplay(long n, uint16_t *p, unsigned *wheel, unsigned *gas, unsign
     static long da = -99999, db;
     if (da == -99999) { const char *e = getenv("DD_DRIVE"); da = 0; db = 0; if (e) { char *q; da = strtol(e, &q, 10); db = *q == ':' ? strtol(q + 1, NULL, 10) : da; } else da = -99999 - 1; }
     if (da != -99999 - 1) {
-        if (n >= 900) *p = 0;                                            /* no View pulses in the race: the camera stays put */
+        if (n >= 900) *p = keep;                                         /* no View pulses in the race: the camera stays put (only the --press ones stay) */
         *wheel = (unsigned)(512 + (n < 2100 ? da : db));
         *gas = n >= 1300 ? 320u : 0u;
         *brake = 0;
@@ -209,6 +209,8 @@ static void autoplay(long n, uint16_t *p, unsigned *wheel, unsigned *gas, unsign
 
 static const ss22_game game = {
     .name = "Dirt Dash", .tag = "DD", .lname = "dd", .logname = "dirtdash.log", .zip = "dirtdash.zip",
+    .out_gain = 2.4,      /* the chip runs ~2.5x hotter than Rave Racer's (raw median RMS 1393 against 563): x6 pinned a race against the limiter; 2.4 lands on Rave Racer's level (~3400 RMS) */
+    .more_zips = (const char *const[]){ "dirtdasha.zip", NULL },      /* a split MAME set keeps the World DT2 Ver.A program chips in the clone's own zip */
     .board = &dd_board,
     .dsp = { { {"dt1ptrl0.18k", "dt1ptrl1.16k", "dt1ptrl2.15k"},
                {"dt1ptrm0.18j", "dt1ptrm1.16j", "dt1ptrm2.15j"},

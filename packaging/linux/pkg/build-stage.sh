@@ -9,24 +9,22 @@ SRC=$(cd "$1" && pwd); ROMS=$(cd "$2" && pwd); STAGE=$3
 PKG=$(cd "$(dirname "$0")" && pwd)
 # gen/snd_driver.c and rr_lifted.c need GBs of RAM each; JOBS=1 on a small machine
 J=${JOBS:-$(nproc)}
-# namcoc71.zip (c71.bin, the DSP BIOS): passed on when ROMDIR has one, for MAME sets that keep it out of the game zips
-C71=; [ -f "$ROMS/namcoc71.zip" ] && C71="$ROMS/namcoc71.zip"
 
 ( cd "$SRC" && python3 tools/setup_roms.py "$ROMS/propcycl.zip" )
 cmake -S "$SRC" -B "$SRC/build" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPORTABLE=ON
 cmake --build "$SRC/build" --target propcycl -j"$J"
 
-( cd "$SRC/raverace" && python3 tools/setup_roms.py "$ROMS/raverace.zip" "$ROMS/namcoc74.zip" $C71 )
+( cd "$SRC/raverace" && python3 tools/setup_roms.py "$ROMS/raverace.zip" "$ROMS/namcoc74.zip" )
 cmake -S "$SRC/raverace" -B "$SRC/raverace/build" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPORTABLE=ON
 # rr_lifted.c and snd_driver.c each need GBs of RAM to compile: one at a time
 cmake --build "$SRC/raverace/build" --target rr -j1
 
-( cd "$SRC/tokyowar" && python3 tools/setup_roms.py "$ROMS/tokyowar.zip" $C71 )
+( cd "$SRC/tokyowar" && python3 tools/setup_roms.py "$ROMS/tokyowar.zip" )
 cmake -S "$SRC/tokyowar" -B "$SRC/tokyowar/build" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPORTABLE=ON
 # tw_lifted.c (26 MB of goto C), tw_c25.c and tw_snd_driver.c: one at a time
 cmake --build "$SRC/tokyowar/build" --target tw -j1
 
-( cd "$SRC/dirtdash" && python3 tools/setup_roms.py "$ROMS/dirtdash.zip" $C71 )
+( cd "$SRC/dirtdash" && python3 tools/setup_roms.py "$ROMS/dirtdash.zip" )
 cmake -S "$SRC/dirtdash" -B "$SRC/dirtdash/build" -DCMAKE_C_COMPILER=gcc -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPORTABLE=ON
 # dd_lifted.c, dd_c25.c and dd_snd_driver.c: one at a time
 cmake --build "$SRC/dirtdash/build" --target dd -j1
@@ -40,4 +38,5 @@ install -m755 "$PKG/propcycle" "$PKG/raveracer" "$PKG/tokyowars" "$PKG/dirtdash"
 install -m644 "$PKG/propcycle.desktop" "$PKG/raveracer.desktop" "$PKG/tokyowars.desktop" "$PKG/dirtdash.desktop" "$STAGE/usr/share/applications/"
 install -m644 "$PKG/propcycle.png" "$PKG/raveracer.png" "$PKG/tokyowars.png" "$PKG/dirtdash.png" "$STAGE/usr/share/icons/hicolor/256x256/apps/"
 install -m644 "$PKG/README.txt" "$PKG/rom-note.txt" "$STAGE/usr/share/doc/namco22/"
+install -m644 "$SRC/LICENSE" "$STAGE/usr/share/doc/namco22/LICENSE"
 echo "staged into $STAGE"

@@ -20,7 +20,6 @@
 #include "rr_romzip.h"
 
 static const struct { const char *name; uint32_t size; int opt; } k_roms[] = {
-    {"c71.bin", 0x2000},
     {"c74.bin", 0x4000},
     {"rr1gam.2d", 0x100},
     {"rr1gam.3d", 0x100},
@@ -189,11 +188,10 @@ static int find_zip(const char *name, const char *exe_dir, char *out, size_t n)
 
 bool rr_romzip_autosetup(const char *rom_dir, const char *exe_dir, char *err, size_t errlen)
 {
-    /* namcoc71.zip: c71.bin, the DSP BIOS, in the MAME sets whose raverace.zip does not carry it (it used to be found only if it had been added to namcoc74.zip) */
-    static const char *zips[] = { "raverace.zip", "namcoc74.zip", "namcoc71.zip" };
+    static const char *zips[] = { "raverace.zip", "namcoc74.zip" };     /* (the DSP BIOS, c71.bin, is built into the engine) */
     char path[1024];
     int found = 0;
-    for (int z = 0; z < 3; z++) {
+    for (int z = 0; z < 2; z++) {
         if (!find_zip(zips[z], exe_dir, path, sizeof path)) continue;
         found++;
         printf("Unpacking ROMs from %s into %s ...\n", path, rom_dir);
@@ -202,8 +200,6 @@ bool rr_romzip_autosetup(const char *rom_dir, const char *exe_dir, char *err, si
     const char *miss = rr_romzip_missing(rom_dir);
     if (!miss) { printf("ROMs unpacked.\n"); return true; }
     if (!found) snprintf(err, errlen, "no raverace.zip / namcoc74.zip found");
-    else if (!strcmp(miss, "c71.bin"))
-        snprintf(err, errlen, "c71.bin (the C71 DSP BIOS) is in none of the zips found -- some MAME sets keep it in namcoc71.zip: put namcoc71.zip in the roms folder too");
     else snprintf(err, errlen, "still missing %s -- raverace.zip and namcoc74.zip (the MAME sets) are both needed", miss);
     return false;
 }

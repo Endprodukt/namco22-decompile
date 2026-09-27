@@ -44,7 +44,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/gen/rr_c25.c
           --cov tools/gen/c25.cov --out gen/rr_c25.c --func rr_c25_exec
           # the game's program (FUN_000318BE) and the test-mode ones (FUN_00006DA2's calls)
           --block 31A68 --block 6DE6 --block 6E46 --block 6F3E --block 707E --block 72FE --block 75EE --block 764C
-  DEPENDS ../tools/gen/c25_translate.py tools/gen/c25.cov
+  DEPENDS ../tools/gen/c25_translate.py tools/gen/c25.cov ../engine/c25/c71_bios.inc
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMENT "Translating the master DSP program to C")
 set_source_files_properties(gen/rr_c25.c PROPERTIES COMPILE_OPTIONS "-O1;-w")

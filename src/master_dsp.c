@@ -91,14 +91,12 @@ bool master_dsp_init(const char *rom_dir)
     if (!e || atoi(e) == 0) return false;
     g_log = getenv("PROPCYCL_MASTERLOG") ? atoi(getenv("PROPCYCL_MASTERLOG")) + 1 : 0;
 
-    char bios[1024];
-    snprintf(bios, sizeof bios, "%s/c71.bin", rom_dir ? rom_dir : "extracted");
     g_m = calloc(1, sizeof *g_m);
-    if (!g_m || !c71_load(g_m, bios, NULL)) {
-        fprintf(stderr, "[MASTER] no DSP BIOS at %s -- using the built-in scene expansion\n", bios);
-        free(g_m); g_m = NULL;
+    if (!g_m) {
+        fprintf(stderr, "[MASTER] out of memory -- using the built-in scene expansion\n");
         return false;
     }
+    c71_load_builtin_bios(g_m);                        /* the DSP's BIOS is built in (engine/c25/c71_bios.c): no c71.bin to find */
     uint32_t cnt = (uint32_t)((g_sys.rom[PROG_COUNT_ADDR] << 8) | g_sys.rom[PROG_COUNT_ADDR + 1]) + 1;
     if (cnt > 0x4000) { fprintf(stderr, "[MASTER] bad program size %u\n", cnt); free(g_m); g_m = NULL; return false; }
 

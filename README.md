@@ -7,20 +7,29 @@ they are not included here.
 | Game | Year | Status | Game files you need | Linux | Windows |
 |---|---|---|---|---|---|
 | **Prop Cycle** | 1996 | Playable from start to finish, with sound | `propcycl.zip` | yes | yes |
-| **Rave Racer** | 1995 | Playable: races, with sound | `raverace.zip` + `namcoc74.zip` (+ `namcoc71.zip`, see below) | yes | yes |
-| **Tokyo Wars** | 1996 | Playable: attract, play, sound, widescreen | `tokyowar.zip` (+ `namcoc71.zip`, see below) | yes | yes |
-| **Dirt Dash** | 1995 | Playable: five stages, sound, widescreen | `dirtdash.zip` (+ `namcoc71.zip`, see below) | yes | yes |
+| **Rave Racer** | 1995 | Playable: races, with sound | `raverace.zip` + `namcoc74.zip` | yes | yes |
+| **Tokyo Wars** | 1996 | Playable: attract, play, sound, widescreen | `tokyowar.zip` | yes | yes |
+| **Dirt Dash** | 1995 | Playable: five stages, sound, widescreen | `dirtdash.zip` | yes | yes |
 
 **Are you running the same ROMs as the authors?** The checksums of every ROM file the games use are in
 [docs/ROM_CHECKSUMS.md](docs/ROM_CHECKSUMS.md), with a list in `md5sum` format for each game.
 
-**`c71.bin`, the DSP BIOS (Rave Racer, Tokyo Wars and Dirt Dash).** These three
-games need one more file, `c71.bin`. In some MAME sets it is already inside the
-game's own zip. In others it is a separate MAME set, **`namcoc71.zip`**. If a
-game says `c71.bin` is missing, put `namcoc71.zip` in the same place as the
-game's other zips (the `roms` folder on Windows and in the packages), or add it
-to the `build.sh` command. Leave it zipped, and there is no need to copy
-`c71.bin` into another zip. (Prop Cycle does not need it.)
+**No extra BIOS file.** Earlier instructions asked for `c71.bin` or MAME's `namcoc71.zip` (the DSP's BIOS). The games have it built in now, so you never need it; if you have it, ignore it.
+
+## Download (nothing to build)
+
+Each release on the [Releases page](https://github.com/spacestate1/namco22-decompile/releases) has three ready-made packages.
+**None of them contains game files**: after installing, you put your own zips in a folder (the `INSTALL.txt` next to the packages says where).
+
+| Package | For | How to install |
+|---|---|---|
+| `namco22_VERSION_amd64.deb` | Ubuntu 22.04 or newer, Linux Mint 21 or newer, LMDE 6, Debian 12 or newer | `sudo apt install ./namco22_*_amd64.deb` |
+| `namco22-VERSION-1.fc40.x86_64.rpm` | Fedora 40 or newer | `sudo dnf install ./namco22-*.x86_64.rpm` |
+| `windows-release-VERSION.zip` | Windows 10 or 11, 64-bit | Unzip it anywhere, put the game zips in its `roms` folder, double-click the game's `.exe` |
+
+On Linux, start a game from the applications menu (or type `propcycle`, `raveracer`, `tokyowars` or `dirtdash`). The first time, it makes the folder
+`~/.local/share/namco22/<game>/roms`, tells you which zip is missing and copies any it finds in `~/Downloads`. To uninstall: `sudo apt remove namco22`
+(or `sudo dnf remove namco22`); your game files, settings and scores stay in `~/.local/share/namco22/`.
 
 ## How it was made
 
@@ -46,6 +55,17 @@ This repository has **only the code**. It has no game files and no Ghidra
 project or tools. Everything the games show or play is read from your own
 zips.
 
+## What you need to build it yourself
+
+- **Your own copy of each game's zip** (see the table at the top). They are needed while building, not only while playing: each game's sound program
+  and DSP program is turned into C from them.
+- **Linux (64-bit):** a C compiler (`gcc`), `make`, CMake, `pkg-config`, the SDL2, OpenGL (Mesa) and zlib development files, and Python 3 with numpy.
+  `./install-deps.sh` installs all of these on Debian / Ubuntu, Fedora, Arch, openSUSE, Alpine, Void and Gentoo.
+- **Windows programs** are built from Linux (`./build-windows.sh`): the MinGW-w64 cross compiler (`x86_64-w64-mingw32-gcc`), CMake, `make`, `curl`, `7z` (p7zip)
+  and Python 3. The first run downloads SDL2, zlib and Mesa (the fallback OpenGL for computers with no graphics driver), so it needs the internet.
+- **Building the `.deb`, `.rpm` and Windows zip the way a release is made** is done by the author with a script that is not part of this repository (it needs
+  Podman for the Ubuntu and Fedora containers); you do not need it to build or play.
+
 ## Linux
 
 Open a terminal in this folder. First, once:
@@ -65,9 +85,6 @@ raverace/build.sh ~/Downloads/raverace.zip ~/Downloads/namcoc74.zip        # Rav
 tokyowar/build.sh ~/Downloads/tokyowar.zip                                 # Tokyo Wars
 dirtdash/build.sh ~/Downloads/dirtdash.zip                                 # Dirt Dash
 ```
-
-If a build says `c71.bin` is missing, add `namcoc71.zip` to that command, for
-example `raverace/build.sh ~/Downloads/raverace.zip ~/Downloads/namcoc74.zip ~/Downloads/namcoc71.zip`.
 
 Rave Racer's, Tokyo Wars' and Dirt Dash's first builds take a few minutes.
 
@@ -92,8 +109,7 @@ All four games run on Windows. The Windows version is built from Linux. Type:
 This makes a `windows-release` folder. Copy it to the Windows computer.
 Put the game files in its `roms` folder: `propcycl.zip` for Prop Cycle,
 `raverace.zip` and `namcoc74.zip` for Rave Racer, `tokyowar.zip` for Tokyo
-Wars, `dirtdash.zip` for Dirt Dash. If a game says `c71.bin` is missing, put
-`namcoc71.zip` in the same folder. Then double-click **PropCycle.exe**,
+Wars, `dirtdash.zip` for Dirt Dash. Then double-click **PropCycle.exe**,
 **RaveRacer.exe**, **TokyoWars.exe** or **DirtDash.exe**.
 
 ## How to play
@@ -216,10 +232,39 @@ Press `Esc` and open **Display**. Your choices are saved by themselves.
   [docs/ROM_CHECKSUMS.md](docs/ROM_CHECKSUMS.md)). Prop Cycle
   needs the one called `propcycl`; Rave Racer needs `raverace` and
   `namcoc74`; Tokyo Wars needs `tokyowar`; Dirt Dash needs `dirtdash`.
-- **"c71.bin is missing"** (Rave Racer, Tokyo Wars, Dirt Dash): the DSP BIOS is
-  not inside the game's zip. It is in MAME's separate `namcoc71.zip`: put that
-  zip beside the game's zip (or add it to the `build.sh` command). Do not unzip
-  it. Copying `c71.bin` into `namcoc74.zip` also works, but is no longer needed.
+- **"still missing dt2vera.1"** (Dirt Dash): the program chips `dt2vera.1` and `dt2vera.2` were not found
+  in `dirtdash.zip`. They can be at the top of the zip, in a `dirtdasha/` folder or in any other folder, or
+  in a separate `dirtdasha.zip` beside it. If the message says the chip "cannot be used", it says why (wrong
+  size, damaged zip, or a compression method that is not Deflate or Store).
+- **"c71.bin is missing"**: that message is from an older version. The DSP's BIOS is built in now, so
+  `c71.bin` and `namcoc71.zip` are not needed; update to a current build.
 - **Black or white screen**: update your graphics driver.
+- **Slow, or the picture stutters.** Open the game's log (`raveracer.log`, `tokyowars.log`, `dirtdash.log`,
+  `propcycl.log` beside the `.exe` on Windows; the terminal window on Linux) and look at these lines:
+  - `[HOST] OpenGL: ...` (Prop Cycle: `OpenGL: ...`) names the graphics chip the game is using. It should be
+    your graphics card, for example *NVIDIA GeForce RTX 3050 Ti*. If a laptop with **two** graphics chips shows the
+    weaker one (*AMD Radeon Graphics*, *Intel ...*), the game is on the wrong chip. If it says *llvmpipe*,
+    *GDI Generic* or *Microsoft Basic Render Driver*, it is drawing in software: install the graphics driver.
+  - `[HOST] display N Hz, vsync` or `timer-paced`, and every 600 frames `[PACE] ... interval mean 16.7 ms`.
+    Interval near 16.7 ms with few frames over 20 ms is a steady 60 fps. `[POST] final colour stage: GLSL` is the
+    fast path; `pixel map (slow)` is not: please send us that log.
+  - **Laptops with two graphics chips, Windows:** the newest builds ask Windows for the fast chip themselves. If
+    yours still uses the other one, set it by hand: *Settings > System > Display > Graphics*, add the game's `.exe`,
+    *Options > High performance* (or *NVIDIA Control Panel > Manage 3D settings > Program settings*).
+  - **Linux, two graphics chips:** `__NV_PRIME_RENDER_OFFLOAD=1 __GLX_VENDOR_LIBRARY_NAME=nvidia ./launch.sh dirt`
+    (or `prime-run ./launch.sh dirt`); with AMD or Intel drivers `DRI_PRIME=1 ./launch.sh dirt`.
+  - Plug the laptop in and pick a *Best performance* power mode. On a 120/144/165 Hz screen the games still run at the
+    arcade's 60 Hz, which looks uneven; a 60 Hz screen mode is smoothest. A lower *Esc > Display > Resolution* also helps.
 
 More about the game files: [docs/ROM_SETUP.md](docs/ROM_SETUP.md)
+
+## License
+
+The code in this repository is released under the [MIT License](LICENSE).
+
+- The games themselves (their programs, graphics, sound and music) belong to Namco / Bandai Namco. This repository has no game files and the MIT
+  License does not cover them; the files under `*/gen/` that are translated from the games' programs are derived from Namco's code, and the license
+  covers this project's own work, not theirs.
+- Other people's code keeps its own license: [Nuklear](https://github.com/Immediate-Mode-UI/Nuklear) (`third_party/`, MIT / public domain).
+  The Windows programs also contain [SDL2](https://libsdl.org) and [zlib](https://zlib.net) (both under the zlib license), and the `mesa` folder of the
+  Windows download is [Mesa](https://mesa3d.org) (MIT and other licenses).

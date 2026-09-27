@@ -118,6 +118,49 @@ static inline uint32_t rr_sbcd(uint32_t dst, uint32_t src) {
     return (uint32_t)r;
 }
 
+/* ---- 68020 bit-fields: bfextu / bfexts / bfffo / bftst / bfclr / bfset / bfchg / bfins (tools/namco22/lift.py emit_bitfield). Done here, by the manual's
+ * rules, because Ghidra's p-code gets bfclr / bfset / bfchg on MEMORY wrong: it reuses one temporary for the whole word and for the extracted field, so the
+ * instruction stores the FIELD (0..3) over the entire 32-bit word (Dirt Dash: the car's damage bits 0x55555000 became 0x00000001 at the first crash, and
+ * the truck's body model was looked up at index -1).
+ * A field is `w` bits (1..32) starting `off` bits below the MSB. In a REGISTER the offset is taken mod 32 and the field wraps around inside the register.
+ * In MEMORY the offset is signed and counts from the MSB of the byte at ea: the field lives in the (bit + w + 7) / 8 bytes from ea + (off >> 3), and only
+ * those bytes are read and written back. Flags: N = the field's top bit, Z = field == 0, V = C = 0 (X untouched); bfins takes them from the value inserted. */
+static inline uint32_t rr_bf_mask(uint32_t w) { return w >= 32 ? 0xFFFFFFFFu : ((1u << w) - 1); }
+static inline uint32_t rr_bf_reg_get(uint32_t v, int32_t off, uint32_t w)
+{
+    uint32_t o = (uint32_t)off & 31, rot = o ? (v << o) | (v >> (32 - o)) : v;
+    return rot >> (32 - w);
+}
+static inline uint32_t rr_bf_reg_set(uint32_t v, int32_t off, uint32_t w, uint32_t fld)
+{
+    uint32_t o = (uint32_t)off & 31, rot = o ? (v << o) | (v >> (32 - o)) : v;
+    uint32_t m = rr_bf_mask(w) << (32 - w);
+    rot = (rot & ~m) | ((fld << (32 - w)) & m);
+    return o ? (rot >> o) | (rot << (32 - o)) : rot;
+}
+static inline uint32_t rr_bf_mem_get(uint32_t ea, int32_t off, uint32_t w)
+{
+    uint32_t a = ea + (uint32_t)(off >> 3), bit = (uint32_t)off & 7, n = (bit + w + 7) >> 3;
+    uint64_t v = 0;
+    for (uint32_t i = 0; i < n; i++) v = v << 8 | MRD1(a + i);
+    return (uint32_t)((v >> (n * 8 - bit - w)) & rr_bf_mask(w));
+}
+static inline void rr_bf_mem_set(uint32_t ea, int32_t off, uint32_t w, uint32_t fld)
+{
+    uint32_t a = ea + (uint32_t)(off >> 3), bit = (uint32_t)off & 7, n = (bit + w + 7) >> 3, sh = n * 8 - bit - w;
+    uint64_t v = 0;
+    for (uint32_t i = 0; i < n; i++) v = v << 8 | MRD1(a + i);
+    uint64_t m = (uint64_t)rr_bf_mask(w) << sh;
+    v = (v & ~m) | (((uint64_t)fld << sh) & m);
+    for (uint32_t i = 0; i < n; i++) MWR1(a + i, (v >> ((n - 1 - i) * 8)) & 0xFF);
+}
+static inline void rr_bf_flags(uint32_t fld, uint32_t w)
+{
+    R[0x44] = (uint8_t)((fld >> (w - 1)) & 1);      /* N */
+    R[0x45] = fld == 0;                              /* Z */
+    R[0x46] = 0; R[0x47] = 0;                        /* V, C */
+}
+
 /* SR lives in Ghidra's flag bytes: 0x40 T, 0x41 S, 0x42 IPL (0..7), 0x43 X,
  * 0x44 N, 0x45 Z, 0x46 V, 0x47 C. Ghidra's move-from-SR p-code composes it
  * in ONE-BYTE temporaries, so IPL<<8, S<<13 and T<<15 shift out to zero and

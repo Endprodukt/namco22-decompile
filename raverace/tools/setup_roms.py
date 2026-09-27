@@ -2,12 +2,10 @@
 """Put the Rave Racer ROM files where the game looks for them (extracted/).
 
     python3 tools/setup_roms.py /path/to/raverace.zip /path/to/namcoc74.zip
-    python3 tools/setup_roms.py /path/to/raverace.zip /path/to/namcoc74.zip /path/to/namcoc71.zip   (if c71.bin is not in the others)
     python3 tools/setup_roms.py /path/to/folder-with-the-rom-files
 
 Accepts the standard MAME sets -- raverace.zip plus namcoc74.zip, the sound
-chip's BIOS (c74.bin), plus namcoc71.zip (c71.bin, the DSP BIOS) when your
-raverace.zip does not carry it -- or a folder holding the same chip files or zips. Every file is checked by name and size
+chip's BIOS (c74.bin) -- or a folder holding the same chip files or zips. Every file is checked by name and size
 before anything is copied, so a wrong or incomplete set is reported instead
 of producing a game that crashes later. Exits 0 when extracted/ is complete.
 """
@@ -19,7 +17,7 @@ import zipfile
 # name -> size in bytes. The runtime (src/rom_loader.c, src/mcu_sound.c,
 # src/audio_hle.c) reads exactly these.
 REQUIRED = {
-    "c71.bin": 0x2000, "c74.bin": 0x4000,
+    "c74.bin": 0x4000,
     "rr1gam.2d": 0x100, "rr1gam.3d": 0x100, "rr1gam.4d": 0x100,
     "rv1ccrh.5c": 0x80000, "rv1ccrl.5a": 0x200000,
     "rv1cg0.1a": 0x200000, "rv1cg1.1c": 0x200000, "rv1cg2.1d": 0x200000,
@@ -71,7 +69,7 @@ def from_folder(path):
     if not all(n in found for n in REQUIRED):
         # A folder that holds the zip rather than the chips.
         for entry in sorted(os.listdir(path)):
-            if entry.lower() in ("raverace.zip", "namcoc74.zip", "namcoc71.zip"):
+            if entry.lower() in ("raverace.zip", "namcoc74.zip"):
                 found.update(from_zip(os.path.join(path, entry)))
     return found
 
@@ -103,9 +101,6 @@ def main():
             print(f"  missing:        {n}")
         for n in wrong:
             print(f"  wrong size:     {n} ({len(found[n])} bytes, expected {REQUIRED[n]})")
-        if "c71.bin" in missing:
-            print("  c71.bin is the C71 DSP BIOS. Some MAME sets carry it inside the game's zip; others keep it in a separate")
-            print("  'namcoc71.zip' -- add that zip to this command (it can be listed after the game's zip).")
         print("You need MAME's Rave Racer (World, RV2 Ver.B) set 'raverace' and 'namcoc74' (c74.bin).")
         return 1
 

@@ -6,7 +6,7 @@
  * programs are translated at build time (gen/tw_c25.c, gen/tw_snd_driver.c).
  *
  * The ROM chip list is tools/setup_roms.py's REQUIRED: names and sizes, checked before anything is written. tokyowar.zip is the whole set
- * (the sound BIOS c71.bin and the default EEPROM included); its Japanese program set under tokyowarj/ is not taken.
+ * (the default EEPROM included; the DSP BIOS, c71.bin, is built into the engine: engine/c25/c71_bios.c); its Japanese program set under tokyowarj/ is not taken.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,7 +17,6 @@
 bool tw_c25_exec(c71_t *d, int pc);          /* gen/tw_c25.c */
 
 static const eng_rom_t k_roms[] = {
-    {"c71.bin", 0x2000},
     {"tokyowar_defaults.nv", 0x2000},
     {"tw1ccrh.1d", 0x80000},
     {"tw1ccrl.3d", 0x200000},
@@ -137,6 +136,7 @@ static void autoplay(long n, uint16_t *p, unsigned *wheel, unsigned *pedal1, uns
 
 static const ss22_game game = {
     .name = "Tokyo Wars", .tag = "TW", .lname = "tw", .logname = "tokyowar.log", .zip = "tokyowar.zip",
+    .out_gain = 1.4,      /* the chip runs ~4x hotter than Rave Racer's (raw median RMS 2369 against 563): x6 put 15% of the samples above the limiter's knee; 1.4 lands on Rave Racer's level (~3400 RMS) */
     .board = &tw_board,
     .dsp = { { {"tw1ptrl0.18k", "tw1ptrl1.16k", "tw1ptrl2.15k", "tw1ptrl3.14k"},
                {"tw1ptrm0.18j", "tw1ptrm1.16j", "tw1ptrm2.15j", "tw1ptrm3.14j"},

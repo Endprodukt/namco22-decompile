@@ -6,9 +6,6 @@ PROP CYCLE, RAVE RACER, TOKYO WARS and DIRT DASH
      Rave Racer   raverace.zip  and  namcoc74.zip
      Tokyo Wars   tokyowar.zip
      Dirt Dash    dirtdash.zip
-   Rave Racer, Tokyo Wars and Dirt Dash also need c71.bin (the DSP BIOS). Usually it
-   is inside the game's zip. If a game says "c71.bin is missing", put MAME's
-   namcoc71.zip in the same folder (still zipped; nothing needs adding to another zip).
 
 2. Double-click PropCycle.exe, RaveRacer.exe, TokyoWars.exe or DirtDash.exe.
 
@@ -65,12 +62,16 @@ PROBLEMS?
                                 "tokyowar" (World, TW2 Ver.A) and
                                 "dirtdash" (World, DT2 Ver.A).
 
-"c71.bin is missing"            Your ROM set keeps the DSP BIOS in a separate MAME
-                                set. Put namcoc71.zip in the roms folder beside
-                                the game's zip and start the game again.
-
 "Windows protected your PC"     Click "More info", then "Run anyway".
                                 (The games are not signed.)
+
+Slow or stuttering              Open the game's log (raveracer.log, tokyowars.log, dirtdash.log,
+                                propcycl.log beside the .exe). The line "[HOST] OpenGL: ..." says which
+                                graphics chip is used: on a laptop with two of them it must be the
+                                fast one (NVIDIA / AMD card). If not, set it by hand: Windows Settings >
+                                System > Display > Graphics > add the .exe > Options > High performance.
+                                "llvmpipe", "GDI Generic" or "Microsoft Basic Render Driver" means no graphics
+                                driver is installed. Plug the laptop in; a 60 Hz screen mode is smoothest.
 
 Black screen or won't start     Update your graphics driver. In a virtual
                                 machine Prop Cycle falls back to the "mesa"

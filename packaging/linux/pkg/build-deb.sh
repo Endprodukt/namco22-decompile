@@ -5,6 +5,7 @@
 set -e
 STAGE=$1; VER=$2; OUT=$3; PKG=$(cd "$(dirname "$0")" && pwd)
 install -d "$STAGE/DEBIAN"
+cp "$STAGE/usr/share/doc/namco22/LICENSE" "$STAGE/usr/share/doc/namco22/copyright"      # Debian looks for /usr/share/doc/PACKAGE/copyright
 SIZE=$(du -sk --exclude=DEBIAN "$STAGE" | cut -f1)
 cat > "$STAGE/DEBIAN/control" <<CTL
 Package: namco22
@@ -24,8 +25,7 @@ Description: Prop Cycle, Rave Racer, Tokyo Wars and Dirt Dash -- decompiled Namc
  ~/.local/share/namco22/propcycle/roms/ (propcycl.zip) and
  ~/.local/share/namco22/raverace/roms/ (raverace.zip, namcoc74.zip) and
  ~/.local/share/namco22/tokyowar/roms/ (tokyowar.zip) and
- ~/.local/share/namco22/dirtdash/roms/ (dirtdash.zip). If a game says c71.bin is
- missing, also put namcoc71.zip in its roms/ folder.
+ ~/.local/share/namco22/dirtdash/roms/ (dirtdash.zip).
  See /usr/share/doc/namco22/README.txt.
 CTL
 { echo '#!/bin/sh'; echo 'cat <<"NOTE"'; cat "$PKG/rom-note.txt"; echo 'NOTE'

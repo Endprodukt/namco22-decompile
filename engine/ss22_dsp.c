@@ -112,10 +112,9 @@ bool ss22_dsp_init(const char *dir)
 {
     g_ss22_dsp_control = ss22_dsp_control;             /* syscon 0x1C reaches this master (engine/ss22_board.c) */
     if (!load_pointrom(dir)) return false;
-    char bios[1024];
-    snprintf(bios, sizeof bios, "%s/c71.bin", dir);
     m[0] = calloc(1, sizeof *m[0]);
-    if (!m[0] || !c71_load(m[0], bios, NULL)) { fprintf(stderr, "[DSP] no BIOS at %s\n", bios); return false; }
+    if (!m[0]) return false;
+    c71_load_builtin_bios(m[0]);                       /* the DSP's BIOS is built in (engine/c25/c71_bios.c): no c71.bin to find */
     setup(m[0], g_ss22.poly);
     nm = 1;
 #ifdef SS22_ORACLE

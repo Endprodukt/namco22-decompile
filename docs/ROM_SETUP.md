@@ -28,7 +28,6 @@ extracted/
   pr1scg0.12f  pr1scg1.10f                              # 2 MiB each
   pr1data.8k                                            # 512 KiB sound MCU program
   pr1wavea.2l  pr1waveb.1l                              # 4 MiB each sound data
-  c71.bin                                               # 8 KiB, optional
 ```
 
 The full list is needed to play. `pr1data.8k` and the two wave ROMs are the
@@ -69,20 +68,9 @@ It checks every file's name and size and copies them into
 `raverace/extracted/`. A folder holding the chip files, or holding the zips,
 works too.
 
-**`c71.bin` (the C71 DSP BIOS).** It must be one of the files. Some MAME sets
-have it inside `raverace.zip`; others keep it in a separate set,
-`namcoc71.zip`. If the script says `c71.bin` is missing, add that zip:
-
-```bash
-raverace/build.sh /path/to/raverace.zip /path/to/namcoc74.zip /path/to/namcoc71.zip
-```
-
-The game's own first-run unpacker (installed packages, Windows) looks for
-`raverace.zip`, `namcoc74.zip` and `namcoc71.zip` in its `roms` folder, so
-there it is enough to put `namcoc71.zip` beside the others. Older versions
-found `c71.bin` only inside `raverace.zip` or `namcoc74.zip`; if you added it
-to `namcoc74.zip` by hand, that still works. The Japanese sets inside `raverace.zip` (`raveracej/`,
-`raveraceja/`) are different programs and are not used.
+The DSP's BIOS (`c71.bin`, MAME's `namcoc71` set) is built into the games, in all four:
+you never need it, whatever your MAME version calls it or wherever it keeps it. The Japanese sets
+inside `raverace.zip` (`raveracej/`, `raveraceja/`) are different programs and are not used.
 
 ## Tokyo Wars
 
@@ -93,11 +81,10 @@ to the build script:
 tokyowar/build.sh /path/to/tokyowar.zip
 ```
 
-It checks all 34 files by name and size and copies them into
+It checks all 33 files by name and size and copies them into
 `tokyowar/extracted/`. The installed packages and the Windows version do
 this themselves the first time the game starts, from `tokyowar.zip` in the
-game's `roms` folder. If `c71.bin` (the DSP BIOS) is not inside `tokyowar.zip`,
-add MAME's `namcoc71.zip` beside it (or to the `build.sh` command). The Japanese set inside the zip (`tokyowarj/`) is a
+game's `roms` folder. The Japanese set inside the zip (`tokyowarj/`) is a
 different program and is not used.
 
 ## Dirt Dash
@@ -109,11 +96,17 @@ to the build script:
 dirtdash/build.sh /path/to/dirtdash.zip
 ```
 
-It checks all 27 files by name and size and copies them into
-`dirtdash/extracted/` (if `c71.bin`, the DSP BIOS, is not inside `dirtdash.zip`, add
-MAME's `namcoc71.zip` to the command); the game's 68020 program is the pair of chips
+It checks all 26 files by name and size and copies them into
+`dirtdash/extracted/`; the game's 68020 program is the pair of chips
 `dt2vera.1` / `dt2vera.2` inside the zip's `dirtdasha/` folder. The
 installed packages and the Windows version do this themselves the first time
 the game starts, from `dirtdash.zip` in the game's `roms` folder. The
-Japanese set inside the zip (`dirtdashj/`) is a different program and is not
+Japanese set inside the zip (`dirtdashj/`, chips named `dt1vera.*`) is a different program and is not
 used.
+
+The two program chips, `dt2vera.1` and `dt2vera.2`, are taken from `dirtdasha/` in the zip
+first, then from the top level of the zip, then from any other folder in it, and a separate
+`dirtdasha.zip` in the same folder is read too (MAME sets that are not merged keep them
+there). If a chip is in the zip but cannot be used, the message says why: the wrong size
+(a different or damaged dump), a damaged zip, or a compression method other than Deflate or
+Store (re-zip it). Compare your files with [ROM_CHECKSUMS.md](ROM_CHECKSUMS.md).

@@ -51,6 +51,7 @@ static bool gl_ok;                             /* a GL context and the video ROM
  * render time, reported as percentiles at exit. Quote these, never one run's fps. */
 #include <time.h>
 #include "tex_bake.h"
+#include "win_gpu.h"          /* Windows: run on the discrete GPU of a two-GPU laptop (Optimus / PowerXpress) */
 static FILE *perflog;                         /* RR_PERFLOG=<file>: one line per frame -- see the perf block */
 static double perflog_texels;
 static int perf_on;
@@ -316,8 +317,7 @@ int main(int argc, char **argv)
                 snprintf(msg, sizeof msg,
                          "Rave Racer needs its ROMs.\n\n"
                          "Put raverace.zip and namcoc74.zip (the MAME ROM sets) in the \"roms\" "
-                         "folder next to this program, then start it again. (If it says c71.bin is missing, "
-                         "put MAME's namcoc71.zip there too.)\n\n(%s)", err);
+                         "folder next to this program, then start it again.\n\n(%s)", err);
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Rave Racer", msg, NULL);
             }
             SDL_free(base);

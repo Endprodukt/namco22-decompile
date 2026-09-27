@@ -98,6 +98,8 @@ extern void (*c25_hook_post)(c71_t *d);
 /* Load the BIOS (c71.bin, 8 KB at program 0) and the game's master program
  * (at program 0x4000). Either path may be NULL. Returns false on a read error. */
 bool c71_load(c71_t *d, const char *bios_path, const char *prog_path);
+/* The BIOS built into the program (engine/c25/c71_bios.c): what every game uses. c71_load's bios_path is for the development tools that test other images. */
+void c71_load_builtin_bios(c71_t *d);
 /* Reset CPU state (memories kept). */
 void c71_reset(c71_t *d);
 /* One step: take a pending interrupt, idle, tick the timer, then run the

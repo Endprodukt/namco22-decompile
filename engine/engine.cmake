@@ -55,6 +55,7 @@ set(NAMCO22_ENGINE_ROMZIP_SRC
 set(NAMCO22_ENGINE_C25_SRC
     ${NAMCO22_ENGINE_DIR}/c25/c25_bus.c
     ${NAMCO22_ENGINE_DIR}/c25/c25_core.c
+    ${NAMCO22_ENGINE_DIR}/c25/c71_bios.c      # the DSP BIOS, built in: no c71.bin / namcoc71.zip needed
 )
 # the interpreter ORACLE the translations are gated against: dev builds only
 get_filename_component(NAMCO22_TOOLS_DIR ${NAMCO22_ENGINE_DIR}/../tools ABSOLUTE)

@@ -60,6 +60,8 @@ typedef struct ss22_game {
     const ss22_input_game *input;
     const eng_rom_t *roms; int n_roms;       /* the chips, name and size */
     const char *zip;                         /* the MAME set the game unpacks them from */
+    double out_gain;                         /* speaker gain for THIS game's chip levels (engine/audio_out.h); 0 = the shared default x6, which is Rave Racer's */
+    const char *const *more_zips;            /* NULL-terminated: further zips of the same set searched for chips, e.g. a split set's clone zip ("dirtdasha.zip"); or NULL */
     void (*entry)(void);                     /* the 68K's reset entry in the lifted program: never returns */
     uint32_t reset_sp_addr;                  /* 0 */
     int         polls_per_frame;             /* 68K instructions a frame (the poll budget): MAME's average */

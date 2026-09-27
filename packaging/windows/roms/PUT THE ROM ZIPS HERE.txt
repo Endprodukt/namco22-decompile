@@ -5,5 +5,3 @@ Put the MAME ROM sets in this folder, still zipped:
   Tokyo Wars   tokyowar.zip
   Dirt Dash    dirtdash.zip
 
-Rave Racer, Tokyo Wars and Dirt Dash also need c71.bin (the DSP BIOS). If a game
-says "c71.bin is missing", put MAME's namcoc71.zip in this folder too.

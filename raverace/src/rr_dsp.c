@@ -84,9 +84,8 @@ bool rr_dsp_init(const char *dir)
 {
     if (!load_pointrom(dir)) return false;
     m = calloc(1, sizeof *m);
-    char bios[1024];
-    snprintf(bios, sizeof bios, "%s/c71.bin", dir);
-    if (!c71_load(m, bios, NULL)) { fprintf(stderr, "[DSP] no BIOS at %s\n", bios); return false; }
+    if (!m) return false;
+    c71_load_builtin_bios(m);                          /* the DSP's BIOS is built in (engine/c25/c71_bios.c): no c71.bin to find */
     m->poly = g_rr.poly;
     m->ptrom = (const uint32_t *)(const void *)g_pointrom;
     m->ptrom_words = g_pointrom_words;

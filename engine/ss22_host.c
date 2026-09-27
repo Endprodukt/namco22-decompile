@@ -24,6 +24,7 @@
 #include "eng_pace.h"
 #include "tex_bake.h"
 #include "ss22_host.h"
+#include "gl_warn.h"
 
 #define FRAME_NS 16693000ull                      /* 1 / 59.906 Hz, 25.6 MHz / 814 / 525 */
 
@@ -78,6 +79,7 @@ bool ss22_host_open(const ss22_host_game *g, int scale, bool fs)      /* scale <
     if (vsync && SDL_GL_SetSwapInterval(1) != 0) vsync = false;
     if (!vsync) SDL_GL_SetSwapInterval(0);
     fprintf(stderr, "[HOST] OpenGL: %s; display %d Hz, %s\n", (const char *)glGetString(GL_RENDERER), hz, vsync ? "vsync" : "timer-paced at 59.906 Hz");
+    eng_gl_warn_software((const char *)glGetString(GL_RENDERER));
     SDL_SetWindowMinimumSize(win, 320, 240);
     game->input_init();                            /* after the cfg: the key bindings */
     eng_ui_add_page(game->input_page());
@@ -85,6 +87,7 @@ bool ss22_host_open(const ss22_host_game *g, int scale, bool fs)      /* scale <
     else if (eng_pad_present()) eng_ui_set_hint(ENG_PAD_MENU_HINT, 60 * 8);         /* a pad has no Esc: say how to reach the menu */
     tex_bake_window_defaults();                    /* a per-frame budget for cold texture bakes (engine/tex_bake.c; ENG_TEX_BUDGET) */
     eng_disp_set_volume_hook(volume_hook);
+    eng_audio_set_gain(game->out_gain);
     const bool audio = eng_audio_open();
     eng_disp_attach(win);                          /* exclusive fullscreen, a size too big for this display; the volume */
     if (audio) game->snd_set_output(true);

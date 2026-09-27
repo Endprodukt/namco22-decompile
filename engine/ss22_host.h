@@ -20,6 +20,7 @@ typedef struct {
     void (*input_update)(void);              /* once per emulated frame while the game runs */
     void (*input_neutral)(void);             /* the menu opened: a centred wheel and no buttons */
     void (*snd_set_output)(bool live);       /* the sound board's output goes to the sound card */
+    double out_gain;                         /* the game's speaker gain (engine/audio_out.h); 0 = the shared default */
 } ss22_host_game;
 
 bool ss22_host_open(const ss22_host_game *g, int scale, bool fullscreen);   /* a real window; scale <= 0 = the saved window size */

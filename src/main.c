@@ -6,6 +6,8 @@
  *        ./propcycl [rom_dir] --screenshot [file.ppm] [frames]
  */
 #include "propcycl.h"
+#include "win_gpu.h"          /* Windows: run on the discrete GPU of a two-GPU laptop (Optimus / PowerXpress) */
+#include "gl_warn.h"
 #include "quad_gl.h"
 #include "vaddr.h"
 #ifndef W
@@ -420,6 +422,7 @@ static bool init_sdl(void) {
         const char *ren = (const char *)glGetString(GL_RENDERER);
         const char *ver = (const char *)glGetString(GL_VERSION);
         printf("OpenGL: %s | %s | %s\n", ven ? ven : "?", ren ? ren : "?", ver ? ver : "?");
+        if (!headless) eng_gl_warn_software(ren);
         if (!headless && ren && strstr(ren, "GDI Generic")) {   /* Windows: only when no mesa/ folder either */
             SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, "Prop Cycle",
                 "No OpenGL graphics driver was found (Windows gave the basic "

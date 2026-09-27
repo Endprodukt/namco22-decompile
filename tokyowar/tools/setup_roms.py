@@ -19,7 +19,6 @@ import zipfile
 # name -> size in bytes. The runtime (src/rom_loader.c, src/mcu_sound.c,
 # src/audio_hle.c) reads exactly these.
 REQUIRED = {
-    "c71.bin": 0x2000,
     "tokyowar_defaults.nv": 0x2000,
     "tw1ccrh.1d": 0x80000,
     "tw1ccrl.3d": 0x200000,
@@ -94,7 +93,7 @@ def from_folder(path):
     if not all(n in found for n in REQUIRED):
         # A folder that holds the zip rather than the chips.
         for entry in sorted(os.listdir(path)):
-            if entry.lower() in ("tokyowar.zip", "namcoc71.zip"):
+            if entry.lower() in ("tokyowar.zip",):
                 found.update(from_zip(os.path.join(path, entry)))
     return found
 
@@ -126,9 +125,6 @@ def main():
             print(f"  missing:        {n}")
         for n in wrong:
             print(f"  wrong size:     {n} ({len(found[n])} bytes, expected {REQUIRED[n]})")
-        if "c71.bin" in missing:
-            print("  c71.bin is the C71 DSP BIOS. Some MAME sets carry it inside the game's zip; others keep it in a separate")
-            print("  'namcoc71.zip' -- add that zip to this command (it can be listed after the game's zip).")
         print("You need MAME's Tokyo Wars (World, TW2 Ver.A) set 'tokyowar'.")
         return 1
 

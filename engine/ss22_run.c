@@ -29,6 +29,7 @@
 #endif
 #include "lift_rt.h"
 #include "lift_cpu.h"
+#include "win_gpu.h"          /* Windows: run on the discrete GPU of a two-GPU laptop (Optimus / PowerXpress) */
 
 const ss22_game *g_ss22_game;
 static char **g_argv;
@@ -148,6 +149,54 @@ static void sweep_tick(void)
     prev_slot = slot;
 }
 
+/* The rest of the video state, in the layout tools/mame/vid_dump.lua writes for MAME (so `dd --render-dump DIR F OUT` can DRAW one of our own frames, and the
+ * two can be diffed byte for byte): the share's own polygon words, palette RAM, mixer, character RAM, text RAM, sprite RAM, VICS data and control, the CZ
+ * registers and banks, the tilemap attributes and the spot RAM. Everything the picture is composed from. */
+static void dump_be16s(const char *name, const uint16_t *v, int n)
+{
+    char p[1024]; snprintf(p, sizeof p, "%s/%s_f%u.bin", dump_dir, name, rr_frame);
+    FILE *f = fopen(p, "wb");
+    if (!f) return;
+    for (int i = 0; i < n; i++) { uint8_t b[2] = { (uint8_t)(v[i] >> 8), (uint8_t)v[i] }; fwrite(b, 1, 2, f); }
+    fclose(f);
+}
+static void dump_raw(const char *name, const void *data, size_t n)
+{
+    char p[1024]; snprintf(p, sizeof p, "%s/%s_f%u.bin", dump_dir, name, rr_frame);
+    FILE *f = fopen(p, "wb");
+    if (f) { fwrite(data, 1, n, f); fclose(f); }
+}
+static void dump_video_state(void)
+{
+    char p[1024];
+    snprintf(p, sizeof p, "%s/polyraw_f%u.bin", dump_dir, rr_frame);
+    FILE *f = fopen(p, "wb");
+    if (f) {
+        for (uint32_t i = 0; i < SS22_POLY_WORDS; i++) {
+            uint32_t w = g_ss22.poly[i];
+            uint8_t b[4] = { (uint8_t)(w >> 24), (uint8_t)(w >> 16), (uint8_t)(w >> 8), (uint8_t)w };
+            fwrite(b, 1, 4, f);
+        }
+        fclose(f);
+    }
+    dump_raw("pal", g_ss22.pal, sizeof g_ss22.pal);
+    dump_raw("mix", g_ss22.mixer, sizeof g_ss22.mixer);
+    dump_raw("cgram", g_ss22.cgram, sizeof g_ss22.cgram);
+    dump_raw("text", g_ss22.text, sizeof g_ss22.text);
+    dump_raw("spr", g_ss22.sprite, sizeof g_ss22.sprite);
+    dump_raw("vics", g_ss22.vics, sizeof g_ss22.vics);
+    dump_be16s("czattr", g_ss22.czattr, 8);
+    dump_be16s("tmattr", g_ss22.tilemapattr, 8);
+    for (int b = 0; b < 4; b++) { char nm[16]; snprintf(nm, sizeof nm, "czram%d", b); dump_be16s(nm, g_ss22.czram[b], 256); }
+    dump_be16s("spot", g_ss22.spotram, 0x800);
+    snprintf(p, sizeof p, "%s/vicsctl_f%u.bin", dump_dir, rr_frame);
+    f = fopen(p, "wb");
+    if (f) {
+        for (int i = 0; i < 0x20; i++) { uint32_t w = g_ss22.vics_ctl[i]; uint8_t b[4] = { (uint8_t)(w >> 24), (uint8_t)(w >> 16), (uint8_t)(w >> 8), (uint8_t)w }; fwrite(b, 1, 4, f); }
+        fclose(f);
+    }
+}
+
 static void dump_state(void)
 {
     if (!dump_dir) return;
@@ -180,6 +229,7 @@ static void dump_state(void)
         }
         fclose(f);
     }
+    dump_video_state();
 }
 
 void rr_tick(void)
@@ -256,7 +306,7 @@ void rr_tick(void)
 
 /* the window's host: the game's name, settings file and cabinet controls (engine/ss22_host.c) */
 static void in_init(void) { ss22_input_init(g_ss22_game->input); }
-static void in_update(void) { if (!start_on) ss22_input_update(); }      /* the start script has the cabinet until it is over */
+static void in_update(void) { if (!start_on && !autoplay) ss22_input_update(); }      /* the start script has the cabinet until it is over; --autoplay's script keeps it (else the window's idle keyboard overwrites it every frame) */
 static ss22_host_game host_game;
 
 int ss22_main(int argc, char **argv, const ss22_game *g)
@@ -274,7 +324,7 @@ int ss22_main(int argc, char **argv, const ss22_game *g)
     snprintf(cfgfile, sizeof cfgfile, "%s_controls.cfg", g->lname);
     snprintf(nvfile, sizeof nvfile, "%s_eeprom.nv", g->lname);
     host_game = (ss22_host_game){ g->name, cfgfile, g->tag, g->lname, in_init, ss22_input_page, ss22_input_event, in_update,
-                                  ss22_input_neutral, ss22_snd_set_output };
+                                  ss22_input_neutral, ss22_snd_set_output, g->out_gain };
     const char *rom_dir = "extracted";
     const char *rd_dir = NULL, *rd_out = NULL; int rd_frame = 0, frames_given = 0;
     if (argc == 1) win_scale = -1;                      /* started with no arguments (a double-click, the Windows how-to): play, in a window */
@@ -307,13 +357,15 @@ int ss22_main(int argc, char **argv, const ss22_game *g)
     if (eng_romzip_missing(rom_dir, g->roms, g->n_roms) && !strcmp(rom_dir, "extracted") && !eng_romzip_missing("roms", g->roms, g->n_roms)) rom_dir = "roms";
     if (eng_romzip_missing(rom_dir, g->roms, g->n_roms)) {
         char err[512], *base = SDL_GetBasePath();
-        const char *zips[] = { g->zip, "namcoc71.zip" };      /* namcoc71.zip: c71.bin, the DSP BIOS, in the MAME sets whose game zip does not carry it */
-        if (!eng_romzip_autosetup(rom_dir, base, zips, 2, g->roms, g->n_roms, err, sizeof err)) {
+        const char *zips[8] = { g->zip };
+        int nz = 1;
+        for (int i = 0; g->more_zips && g->more_zips[i] && nz < 8; i++) zips[nz++] = g->more_zips[i];
+        if (!eng_romzip_autosetup(rom_dir, base, zips, nz, g->roms, g->n_roms, err, sizeof err)) {
             fprintf(stderr, "%s needs its ROMs: %s\n", g->name, err);
             if (win_scale) {
                 char msg[1024];
                 snprintf(msg, sizeof msg, "%s needs its ROMs.\n\nPut %s (the MAME ROM set) in the \"roms\" "
-                         "folder next to this program, then start it again. (If it says c71.bin is missing, put MAME's namcoc71.zip there too.)\n\n(%s)", g->name, g->zip, err);
+                         "folder next to this program, then start it again.\n\n(%s)", g->name, g->zip, err);
                 SDL_ShowSimpleMessageBox(SDL_MESSAGEBOX_ERROR, g->name, msg, NULL);
             }
             SDL_free(base);

@@ -28,7 +28,7 @@ instruction becomes a `case` that
 so the translation can be gated as EQUAL to the oracle. A PC with no
 translation TRAPS LOUDLY (the master stops and says where) -- never skipped.
 """
-import argparse, os, sys
+import argparse, os, re, sys
 
 ap = argparse.ArgumentParser()
 ap.add_argument('--game', required=True, choices=['pc', 'rr', 'tw', 'dd'])
@@ -45,12 +45,10 @@ a = ap.parse_args()
 def words_be(b):
     return [(b[2 * i] << 8) | b[2 * i + 1] for i in range(len(b) // 2)]
 
-bp = os.path.join(a.roms, 'c71.bin')
-if os.path.exists(bp):
-    bios_img = {i: w for i, w in enumerate(words_be(open(bp, 'rb').read())[:0x4000])}
-else:   # optional in some ROM sets: the BIOS is then left untranslated (the master cannot boot)
-    print(f'c25_translate: WARNING: no {bp}; the master DSP BIOS is not translated', file=sys.stderr)
-    bios_img = {}
+# the C71 BIOS is built into the games (engine/c25/c71_bios.inc, made by tools/gen/c71_embed.py from MAME's c71.bin): the same words the run-time loads
+_inc = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'engine', 'c25', 'c71_bios.inc')
+bios_img = {i: int(w, 16) for i, w in enumerate(re.findall(r'0x([0-9a-fA-F]{4})', open(_inc).read())[:0x4000])}
+assert len(bios_img) == 0x1000, f'{_inc}: expected 4096 BIOS words, found {len(bios_img)}'
 
 if a.game == 'dd':
     # Dirt Dash (Super System 22): two 2 MB chips, MAME ROM_LOAD32_WORD_SWAP -- dt2vera.2 the high word of every long, dt2vera.1 the

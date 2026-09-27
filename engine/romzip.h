@@ -4,7 +4,9 @@
  * So a game can be set up by dropping its zip(s) beside it: on Windows there is no Python for tools/setup_roms.py. At startup,
  * if the ROM folder is incomplete, the game calls eng_romzip_autosetup() with ITS chip list (name and size): every chip is taken
  * by name and size, checked against the zip's own CRC, and written into the ROM folder. Only top-level zip entries are taken, unless a chip names its
- * zip path (`zname`): a MAME set also carries its other program sets under sub-folders. The same code as Rave Racer's src/rr_romzip.c, with the
+ * zip path (`zname`): a MAME set also carries its other program sets under sub-folders. Such a chip is taken from that path first, then from the top
+ * level, then under the same name in any folder (a split set, a zip made by hand). A chip that is in the zip but unusable (wrong size, damaged, an
+ * unsupported compression method) says so in the error. The same code as Rave Racer's src/rr_romzip.c, with the
  * chip list and the zip names supplied by the game; Rave Racer keeps its own copy for now.
  */
 #ifndef ENG_ROMZIP_H
