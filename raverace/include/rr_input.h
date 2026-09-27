@@ -17,9 +17,21 @@ extern int g_cfg_winmode, g_cfg_res_w, g_cfg_res_h, g_cfg_wide, g_cfg_aspect, g_
 bool rr_input_set_option(const char *path, const char *key, const char *val);
 const char *rr_input_action_name(int a);
 void rr_input_bind_key(int a, SDL_Scancode sc);
-typedef struct { int axis; bool invert, half; } rr_joyaxis_t;
+typedef struct {
+    int axis; bool invert, half;
+    char guid[40];
+    int direction, rest;
+    bool rest_valid;
+} rr_joyaxis_t;
+void rr_input_capture_begin(int action);
+bool rr_input_capture_event(int action, const SDL_Event *e);
+void rr_input_binding_label(int action, char *text, size_t size);
+bool rr_input_device_matches(SDL_Joystick *js, const char *guid);
+bool rr_input_button_matches(int action, SDL_Joystick *js, int button);
+double rr_input_pedal_value(rr_joyaxis_t *axis, int value);
 extern rr_joyaxis_t g_joy_steer, g_joy_gas, g_joy_brake;
 extern int g_joy_button[RR_ACT_N];
+extern char g_joy_button_guid[RR_ACT_N][40];
 
 void rr_input_load(const char *path);          /* defaults, then the file if present */
 bool rr_input_write(const char *path);         /* write the defaults as a template */
