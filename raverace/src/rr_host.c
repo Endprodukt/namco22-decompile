@@ -453,6 +453,17 @@ static bool pad_steer(int *out)                   /* -32767..32767 */
  * device the steering axis is bound to; no force while paused or in the menu */
 static bool ffb_wheel;
 bool rr_host_ffb_wheel(void) { return ffb_wheel; }
+/* Rave Racer never sends 0 while driving: its command is linear in the wheel's offset but keeps a hold of 2 (of 63) in
+ * the direction last steered -- -2 at 0x7F0, +-2 at the centre, +2 at 0x810, +5 at 0x830, +10 at 0x860 -- so the force
+ * flips from -2 to +2 exactly as the wheel crosses the middle. The cabinet's motor and gearbox lost that in friction; a
+ * modern wheel plays it as a notch at the centre. The hold comes off every command (full scale kept), so the force passes
+ * through zero instead. */
+static int motor_hold_off(int m)
+{
+    if (m > 2) return (m - 2) * 63 / 61;
+    if (m < -2) return (m + 2) * 63 / 61;
+    return 0;
+}
 static void wheel_motor(bool hold)
 {
     SDL_Joystick *js = NULL;
@@ -461,7 +472,7 @@ static void wheel_motor(bool hold)
             g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) js = dev[d].js;
     ffb_wheel = eng_ffb_device(js);
     if (ffb_wheel)
-        eng_ffb_force(hold ? 0 : eng_ffb_decode(rr_hw_motor_byte()), g_cfg_ffb_strength, g_joy_steer.invert != (g_cfg_ffb_invert != 0));
+        eng_ffb_force(hold ? 0 : motor_hold_off(eng_ffb_decode(rr_hw_motor_byte())), g_cfg_ffb_strength, g_joy_steer.invert != (g_cfg_ffb_invert != 0));
 }
 static bool pad_pedal(bool gas, int *out)         /* 0..0x610 */
 {
