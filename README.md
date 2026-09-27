@@ -183,14 +183,14 @@ Rave Racer:
 
 ![Rave Racer: a race in widescreen](docs/images/raverace-widescreen.png)
 
+Dirt Dash:
+
+![Dirt Dash: a race in widescreen](docs/images/dirtdash-gameplay.png)
+
 Prop Cycle:
 
 ![Prop Cycle: gameplay, over the river](docs/images/propcycle-gameplay.png)
 ![The title screen](docs/images/attract-title.png)
-
-Dirt Dash:
-
-![Dirt Dash: a race in widescreen](docs/images/dirtdash-gameplay.png)
 
 Tokyo Wars, the title screen:
 
