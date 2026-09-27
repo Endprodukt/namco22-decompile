@@ -34,11 +34,17 @@ typedef struct {
     uint16_t test_bit, service_bit;          /* the INPUTS bits of the cabinet's Test switch and Service button (0 = the game has none).
                                               * THE TEST SWITCH IS A TOGGLE like MAME's (press once = on, again = off): the action whose bit
                                               * is test_bit latches. The Controls page has both as rows, so a pad (the Steam Deck) reaches them */
+    bool wheel_motor;                        /* the cabinet's steering motor (Dirt Dash): the MCU's UART0 bytes drive a force-feedback wheel */
 } ss22_input_game;
 
 void ss22_input_init(const ss22_input_game *g);         /* after the settings file is loaded: the key bindings, the pads */
 const eng_ui_page *ss22_input_page(void);
 void ss22_input_event(const SDL_Event *e);              /* controller hot-plug */
 void ss22_input_update(void);                           /* once per emulated frame: read the keys and pads, tell the MCU */
-void ss22_input_neutral(void);                          /* release everything (the menu opened): a centred wheel, no buttons */
+void ss22_input_neutral(void);                          /* release everything (the menu opened): a centred wheel, no buttons, no wheel force */
+/* a byte the sound MCU sent the Motor/Feedback PCB (UART0). Bit 0 = a command, bit 1 = the direction (set: toward the wheel's
+ * higher A-D side), bits 2-7 = 63 - the strength with the bit order reversed; 0xFF = no force. The 68K sends one a frame, its
+ * steering torque (work RAM 0xE00148) / 8, clamped to 62 -- what the FFB plugin reads out of MAME, here from the real link. */
+void ss22_input_motor(uint8_t b);
+void ss22_input_close(void);                            /* stop the wheel's force and let go of it (also run at exit) */
 #endif
