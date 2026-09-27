@@ -163,3 +163,17 @@ void rr_hw_set_freeplay(bool on)
     g_rr.wram[0x1043] = on ? 1 : 0;
 }
 bool rr_hw_freeplay(void) { return g_rr.wram[0x1043] != 0; }
+
+/* STEERING MOTOR is group 3 (EEPROM 0x2C0, WRAM 0x10001060) byte 0x11: 0 = ON, 1 = OFF. OFF, the game
+ * neither encodes its steering torque nor sends it (0x029D9C, 0x00470E: `tst.b $10001071`) and keeps the
+ * motor enable (bit 3 of shared 0x20) clear. */
+void rr_hw_set_steering_motor(bool on)
+{
+    eeprom_block_set(0x2C0, 0x11, on ? 0 : 1);
+    eeprom_block_set(0x2E0, 0x11, on ? 0 : 1);
+    g_rr.wram[0x1071] = on ? 0 : 1;
+}
+
+/* MAME handle_driving_io: m_wheel_motor = shareram[0x40/2] & 0xff. The 68K writes it once a frame (0x00470E) from
+ * 0x1000C344, which 0x029DC0 encodes from its steering torque (0x10008DD2) -- see engine/eng_ffb.h for the byte */
+uint8_t rr_hw_motor_byte(void) { return g_rr.shared[0x41]; }

@@ -30,6 +30,9 @@ void rr_host_set_aspect(int a);          /* 0 stretch, 1 4:3, 2 8:7, 3 16:9 */
 void rr_host_set_scaling(int s);         /* 0 smooth, 1 sharp, 2 integer */
 void rr_host_set_volume(int percent);
 void rr_host_set_freeplay(bool on);
+void rr_host_set_ffb_strength(int pct);    /* 0-100, 0 = off; also the game's STEERING MOTOR option */
+void rr_host_set_ffb_invert(bool on);
+bool rr_host_ffb_wheel(void);              /* a force-feedback wheel is bound to steering */
 void rr_host_toggle_record(void);
 void rr_ui_set_hint(const char *text, int frames);   /* a hint line at the bottom of the window while the menu is closed */
 bool rr_ui_hint_active(void);

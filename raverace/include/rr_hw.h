@@ -22,5 +22,7 @@ void rr_hw_vblank(void);
 int  rr_hw_irq_level(void);
 void rr_hw_set_freeplay(bool on);     /* the game's own COIN OPTIONS -> FREE PLAY */
 bool rr_hw_freeplay(void);
+void rr_hw_set_steering_motor(bool on);   /* the game's own OTHERS -> STEERING MOTOR (MAME's EEPROM has it OFF) */
+uint8_t rr_hw_motor_byte(void);           /* the drive command the I/O board passes to the Motor/Feedback PCB */
 
 #endif
