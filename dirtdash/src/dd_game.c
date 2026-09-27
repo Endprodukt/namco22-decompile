@@ -111,6 +111,7 @@ static const ss22_input_game input = {
     { "Enter, then press the new key (Esc cancels)", "Alternates: 6, Enter, Up/Down, A D, Ctrl, Alt", "Pad: stick, RT gas, LT brake, X/Y shift, A" },
     ss22_snd_inputs,
     IN_TEST, IN_SERVICE,
+    true,                                   /* the wheel motor: MAME's "J2 pin 7 /TXD ... to a Motor/Feedback PCB", the MCU's UART0 */
 };
 
 /* widescreen: the race HUD is up while the TIME / POSITION labels are on screen (text cells row 1: col 2 and col 31). Its digits and the map's

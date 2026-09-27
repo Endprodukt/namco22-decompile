@@ -31,6 +31,7 @@
 #include "rr_ui.h"
 #include "eng_pad.h"
 #include "eng_pace.h"
+#include "eng_ffb.h"
 #include "tex_bake.h"
 #include "rr_gl.h"
 #include "render_target.h"
@@ -73,6 +74,7 @@ static void dev_remove(SDL_JoystickID id)
     for (int d = 0; d < MAX_DEV; d++)
         if ((dev[d].gc || dev[d].js) && dev[d].id == id) {
             fprintf(stderr, "[HOST] controller %d removed\n", d);
+            eng_ffb_forget(id);                              /* the haptic side goes before its joystick */
             if (dev[d].gc) SDL_GameControllerClose(dev[d].gc);
             if (dev[d].js) SDL_JoystickClose(dev[d].js);
             dev[d].gc = NULL; dev[d].js = NULL;
@@ -204,6 +206,13 @@ void rr_host_set_freeplay(bool on)
     save_opt("free_play", on ? "1" : "0");
     fprintf(stderr, "[HOST] %s (saved to rr_controls.cfg)\n", on ? "free play" : "coins required");
 }
+void rr_host_set_ffb_strength(int pct)
+{
+    g_cfg_ffb_strength = pct < 0 ? 0 : pct > 100 ? 100 : pct;
+    rr_hw_set_steering_motor(g_cfg_ffb_strength > 0);
+    char v[8]; snprintf(v, sizeof v, "%d", g_cfg_ffb_strength); save_opt("ffb_strength", v);
+}
+void rr_host_set_ffb_invert(bool on) { g_cfg_ffb_invert = on; save_opt("ffb_invert", on ? "1" : "0"); }
 void rr_host_toggle_record(void) { toggle_record(); }
 int  rr_host_res_count(void) { return NRES; }
 void rr_host_res_get(int i, int *w, int *h) { if (i < 0 || i >= NRES) i = 0; *w = res_list[i].w; *h = res_list[i].h; }
@@ -418,6 +427,7 @@ static bool pressed(const SDL_Event *e, int act)
     return e->type == SDL_JOYBUTTONDOWN && rr_input_button_matches(act, SDL_JoystickFromInstanceID(e->jbutton.which), e->jbutton.button);
 }
 
+#define WHEEL_DEADZONE 32             /* of 32767 (0.1% of the lock, 0.3 degrees of the cabinet's 270): a wheel's own sensor noise, nothing more */
 /* analog sources, strongest wins; returns false when every source is neutral */
 static bool pad_steer(int *out)                   /* -32767..32767 */
 {
@@ -429,9 +439,13 @@ static bool pad_steer(int *out)                   /* -32767..32767 */
             if (v > -g_pad_deadzone && v < g_pad_deadzone) v = 0;
             else v = (v > 0 ? v - g_pad_deadzone : v + g_pad_deadzone) * 32767 / (32767 - g_pad_deadzone);
         } else if (rr_input_device_matches(dev[d].js, g_joy_steer.guid) && g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) {
-            v = SDL_JoystickGetAxis(dev[d].js, g_joy_steer.axis);   /* a wheel: no deadzone beyond 1000 */
+            /* a wheel: only a sliver of deadzone, and rescaled to START at its edge. A cut-off +-1000 without the rescale left 3% of
+             * the lock dead and then jumped the steering 0x2B at once: a step exactly at the centre, which the steering motor's
+             * centring then held the wheel against */
+            v = SDL_JoystickGetAxis(dev[d].js, g_joy_steer.axis);
             if (g_joy_steer.invert) v = -v;
-            if (v > -1000 && v < 1000) v = 0;
+            if (v > -WHEEL_DEADZONE && v < WHEEL_DEADZONE) v = 0;
+            else v = (v > 0 ? v - WHEEL_DEADZONE : v + WHEEL_DEADZONE) * 32767 / (32767 - WHEEL_DEADZONE);
         }
         if (abs(v) > abs(best)) best = v;
     }
@@ -439,6 +453,31 @@ static bool pad_steer(int *out)                   /* -32767..32767 */
     if (best < -32767) best = -32767;
     *out = best;
     return best != 0;
+}
+/* THE WHEEL MOTOR: the drive byte the game leaves for the I/O board (rr_hw_motor_byte), played on the raw
+ * device the steering axis is bound to; no force while paused or in the menu */
+static bool ffb_wheel;
+bool rr_host_ffb_wheel(void) { return ffb_wheel; }
+/* Rave Racer never sends 0 while driving: its command is linear in the wheel's offset but keeps a hold of 2 (of 63) in
+ * the direction last steered -- -2 at 0x7F0, +-2 at the centre, +2 at 0x810, +5 at 0x830, +10 at 0x860 -- so the force
+ * flips from -2 to +2 exactly as the wheel crosses the middle. The cabinet's motor and gearbox lost that in friction; a
+ * modern wheel plays it as a notch at the centre. The hold comes off every command (full scale kept), so the force passes
+ * through zero instead. */
+static int motor_hold_off(int m)
+{
+    if (m > 2) return (m - 2) * 63 / 61;
+    if (m < -2) return (m + 2) * 63 / 61;
+    return 0;
+}
+static void wheel_motor(bool hold)
+{
+    SDL_Joystick *js = NULL;
+    for (int d = 0; d < MAX_DEV && !js && g_cfg_ffb_strength > 0; d++)
+        if (dev[d].js && rr_input_device_matches(dev[d].js, g_joy_steer.guid) &&
+            g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) js = dev[d].js;
+    ffb_wheel = eng_ffb_device(js);
+    if (ffb_wheel)
+        eng_ffb_force(hold ? 0 : motor_hold_off(eng_ffb_decode(rr_hw_motor_byte())), g_cfg_ffb_strength, g_joy_steer.invert != (g_cfg_ffb_invert != 0));
 }
 static bool pad_pedal(bool gas, int *out)         /* 0..0x610 */
 {
@@ -632,6 +671,7 @@ bool rr_host_frame(void)
         if (!held(RR_BRAKE) && pad_pedal(false, &pv)) g_hw.brake = (uint16_t)pv;
         else ramp(&g_hw.brake, held(RR_BRAKE) ? 0x610 : 0, 0, 0x610, 160);
     }
+    wheel_motor(paused || rr_ui_is_open());
 
     /* the window may have been resized: keep the render size in step (a
      * native or widescreen size follows the window; it lands next frame) */
@@ -734,6 +774,7 @@ bool rr_host_paused(void) { return paused || rr_ui_is_open(); }
 void rr_host_close(void)
 {
     rr_input_record_stop();
+    eng_ffb_close();                                 /* no force left on the wheel after we are gone */
     for (int d = 0; d < MAX_DEV; d++) if (dev[d].gc || dev[d].js) dev_remove(dev[d].id);
     if (win) { rr_ui_shutdown(); if (glc) SDL_GL_DeleteContext(glc); SDL_DestroyWindow(win); SDL_Quit(); win = NULL; glc = NULL; }
 }

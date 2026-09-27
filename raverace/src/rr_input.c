@@ -25,6 +25,7 @@ rr_bind_t g_bind[RR_ACT_N];
 int g_steer_speed = 160, g_steer_return = 160;      /* MAME PORT_KEYDELTA(160) */
 int g_cfg_freeplay = -1;
 int g_cfg_volume = 100;
+int g_cfg_ffb_strength = 100, g_cfg_ffb_invert = 0;   /* the wheel motor on a force-feedback wheel: 0-100 % (0 = off), push the other way */
 int g_cfg_fullscreen = 0, g_cfg_scale = 2, g_cfg_scaling = 0;
 /* display, matching Prop Cycle's Display menu: window mode 0 windowed / 1 desktop
  * fullscreen / 2 exclusive (-1 = not set: follow `fullscreen`); the RENDER size
@@ -109,6 +110,8 @@ void rr_input_load(const char *path)
         if (!strcmp(k, "steer_return")) { g_steer_return = atoi(v); continue; }
         if (!strcmp(k, "pad_deadzone")) { g_pad_deadzone = atoi(v); continue; }
         if (!strcmp(k, "free_play")) { g_cfg_freeplay = atoi(v) ? 1 : 0; continue; }
+        if (!strcmp(k, "ffb_strength")) { int x = atoi(v); g_cfg_ffb_strength = x < 0 ? 0 : x > 100 ? 100 : x; continue; }
+        if (!strcmp(k, "ffb_invert")) { g_cfg_ffb_invert = atoi(v) ? 1 : 0; continue; }
         if (!strcmp(k, "volume")) { int x = atoi(v); g_cfg_volume = x < 0 ? 0 : x > 100 ? 100 : x; continue; }
         if (!strcmp(k, "fullscreen")) { g_cfg_fullscreen = atoi(v) ? 1 : 0; continue; }
         if (!strcmp(k, "window_mode")) { int x = atoi(v); if (x >= 0 && x <= 2) g_cfg_winmode = x; continue; }
@@ -190,7 +193,9 @@ bool rr_input_write(const char *path)
                "widescreen = 0      # 1: fill a wide window with more track at the sides\n"
                "draw_distance = original  # original | far | farther | maximum: track pieces drawn ahead\n"
                "aspect = 4:3        # widescreen off: stretch | 4:3 | 8:7 | 16:9\n"
-               "scaling = smooth    # smooth | sharp | integer\nvolume = 100        # master volume, percent\n\n");
+               "scaling = smooth    # smooth | sharp | integer\nvolume = 100        # master volume, percent\n"
+               "ffb_strength = 100  # the steering motor on a force-feedback wheel, percent (0 = off)\n"
+               "ffb_invert = 0      # 1: the wheel pushes the wrong way round\n\n");
     fprintf(f, "# Raw joysticks (wheels, pedals, arcade sticks -- anything SDL does not list\n"
                "# as a gamepad). Find axis/button numbers with: ./build/rr --joytest\n"
                "# axis spec: <n>[ invert][ half]   (half = pedal reads 0..32767 only; -1 = off)\n"

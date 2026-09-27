@@ -5,6 +5,7 @@
 #include <math.h>
 #include "ss22_input.h"
 #include "eng_cfg.h"
+#include "eng_ffb.h"
 #include "eng_ui.h"
 
 #define PAD_DEADZONE   4000     /* of 32767: an Xbox pad rests near 3000. 8000 left a quarter of the stick dead, and with the curve below the steering
@@ -159,6 +160,17 @@ static bool key_held(const uint8_t *k, int a)
     return k[bound[a]] || (alt != SDL_SCANCODE_UNKNOWN && k[alt]);
 }
 
+/* ---- the wheel motor (force feedback) -------------------------------------
+ * The cabinet's Motor/Feedback PCB turns each UART0 byte of the MCU into a
+ * steering torque (ss22_input_motor), played on the device the steering axis
+ * is bound to (engine/eng_ffb.c). Settings: ffb_strength 0-100 (0 = off) and
+ * ffb_invert for a wheel whose driver pushes the other way. */
+static int ffb_strength = 100;
+static bool ffb_invert;
+static int motor;                                /* the last command, -63..63: negative pushes toward the higher A-D side */
+
+void ss22_input_close(void) { eng_ffb_close(); }
+
 /* ---- controller / raw-device discovery ---------------------------------- */
 typedef struct { SDL_GameController *gc; SDL_JoystickID id; } pad_dev;
 static pad_dev pads[MAX_DEV];
@@ -199,6 +211,7 @@ static void raw_scan(void)
 {
     for (int i = 0; i < MAX_DEV; i++)
         if (raws[i].js && !SDL_JoystickGetAttached(raws[i].js)) {
+            eng_ffb_forget(raws[i].id);                                  /* the haptic side goes before its joystick */
             SDL_JoystickClose(raws[i].js); memset(&raws[i], 0, sizeof raws[i]); raws[i].id = -1;
         }
 
@@ -229,6 +242,25 @@ static int raw_slot_for(const raw_axis_bind *b)
     }
     for (int i = 0; i < MAX_DEV; i++) if (raws[i].js) return i;
     return -1;
+}
+
+/* the steering device's haptic side (engine/eng_ffb.c opens it once per device) */
+static bool ffb_device(void)
+{
+    const int d = raw_slot_for(&joy_steer);
+    return eng_ffb_device(d >= 0 && joy_steer.axis >= 0 ? raws[d].js : NULL);
+}
+
+static void ffb_apply(void)
+{
+    if (game->wheel_motor && ffb_device()) eng_ffb_force(motor, ffb_strength, joy_steer.invert != ffb_invert);
+}
+
+void ss22_input_motor(uint8_t b)
+{
+    if (!game || !game->wheel_motor) return;
+    motor = eng_ffb_decode(b);
+    ffb_apply();
 }
 
 /* Explicit button bindings also accept standard game controllers. */
@@ -299,8 +331,9 @@ static void axis_label(int kind, char *v, size_t vn)
 }
 
 static int nsw(void) { return (game->test_bit ? 1 : 0) + (game->service_bit ? 1 : 0); }
-static int pg_n(void) { return nsw() + 2 + game->n; }             /* the switches, Reset, Stick steering, the actions */
-static bool pg_val(int r) { return r == nsw() + 1; }
+static int nffb(void) { return game->wheel_motor ? 2 : 0; }      /* Force feedback, FFB direction */
+static int pg_n(void) { return nsw() + nffb() + 2 + game->n; }    /* the switches, the FFB rows, Reset, Stick steering, the actions */
+static bool pg_val(int r) { return (r >= nsw() && r < nsw() + nffb()) || r == nsw() + nffb() + 1; }
 
 static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
 {
@@ -308,6 +341,14 @@ static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
     if (game->test_bit && r == 0) { snprintf(l, ln, "Test mode"); snprintf(v, vn, "%s", test_latch ? "ON" : "OFF"); return; }
     if (game->service_bit && r == (game->test_bit ? 1 : 0)) { snprintf(l, ln, "Service button"); snprintf(v, vn, "press"); return; }
     r -= nsw();
+    if (r == 0 && nffb()) {
+        snprintf(l, ln, "Force feedback");
+        if (ffb_strength) snprintf(v, vn, "%d%%%s", ffb_strength, ffb_device() ? "" : " (no FFB wheel bound)");
+        else snprintf(v, vn, "OFF");
+        return;
+    }
+    if (r == 1 && nffb()) { snprintf(l, ln, "FFB direction"); snprintf(v, vn, "%s", ffb_invert ? "reversed" : "normal"); return; }
+    r -= nffb();
     if (r == 0) { snprintf(l, ln, "Reset keyboard defaults"); return; }
     if (r == 1) { snprintf(l, ln, "Stick steering"); snprintf(v, vn, "%s", steer_levels[steer_level].name); return; }
     r -= 2;
@@ -334,15 +375,24 @@ static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
 
 static void pg_change(int r, int dir)
 {
-    if (r == nsw() + 1) {                                /* Stick steering: left/right step through the levels, a press moves on (wrapping) */
+    if (r == nsw() + nffb() + 1) {                       /* Stick steering: left/right step through the levels, a press moves on (wrapping) */
         const int lv = dir < 0 ? steer_level - 1 : dir > 0 ? steer_level + 1 : (steer_level + 1) % STEER_N;
         if (lv >= 0 && lv < STEER_N) steer_set(lv);
         return;
     }
-    if (dir != 0) return;
+    if (dir != 0 && !pg_val(r)) return;
     if (game->test_bit && r == 0) { test_latch = !test_latch; fprintf(stderr, "[INPUT] test switch %s\n", test_latch ? "ON" : "OFF"); eng_ui_set_open(false); return; }
     if (game->service_bit && r == (game->test_bit ? 1 : 0)) { service_frames = 12; eng_ui_set_open(false); return; }
     r -= nsw();
+    if (r == 0 && nffb()) {                                        /* Left/Right 10% steps, Enter cycles */
+        ffb_strength = dir ? ffb_strength + 10 * dir : (ffb_strength + 10) % 110;
+        if (ffb_strength < 0) ffb_strength = 0;
+        if (ffb_strength > 100) ffb_strength = 100;
+        eng_cfg_set_int("ffb_strength", ffb_strength);
+        return;
+    }
+    if (r == 1 && nffb()) { ffb_invert = !ffb_invert; eng_cfg_set_int("ffb_invert", ffb_invert); return; }
+    r -= nffb();
     if (r == 0) {
         for (int a = 0; a < game->n; a++) if (bound[a] != game->actions[a].def) binding_set(a, game->actions[a].def);
         if (steer_level != STEER_DEFAULT) steer_set(STEER_DEFAULT);
@@ -359,6 +409,7 @@ static void pg_notes(void (*line)(const char *fmt, ...))
     line("Select an action, then press a key/button or move its control.");
     line("Esc cancels. Wheel left/right share one axis binding.");
     line("Pedal direction is learned automatically and saved.");
+    if (game->wheel_motor) line("Force feedback: the cabinet's wheel motor, on the bound steering wheel.");
     for (int i = 1; i < 3; i++) if (game->notes[i]) line("%s", game->notes[i]);
 }
 
@@ -375,6 +426,12 @@ void ss22_input_init(const ss22_input_game *g)
     raw_bindings_load();
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
+    if (g->wheel_motor) {
+        ffb_strength = eng_cfg_int("ffb_strength", 100);
+        if (ffb_strength < 0) ffb_strength = 0;
+        if (ffb_strength > 100) ffb_strength = 100;
+        ffb_invert = eng_cfg_int("ffb_invert", 0) != 0;
+    }
     SDL_GameControllerAddMappingsFromFile("gamecontrollerdb.txt");
     pad_scan();
     raw_scan();
@@ -609,5 +666,6 @@ void ss22_input_neutral(void)
 {
     const unsigned centre = (unsigned)((game->wheel_min + game->wheel_max) / 2);
     wheel = centre; pedal[0] = pedal[1] = 0;
+    motor = 0; ffb_apply();                                  /* the next byte from the game restores the force */
     game->send(game->test_bit && test_latch ? game->test_bit : 0, wheel, pedal[0], pedal[1]);
 }

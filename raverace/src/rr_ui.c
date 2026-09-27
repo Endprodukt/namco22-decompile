@@ -54,13 +54,14 @@ static bool kb_moved;                  /* keep the selected row in view after a 
 
 /* ---- the rows ------------------------------------------------------------- */
 enum { D_WIDE, D_DRAW, D_MODE, D_SIZE, D_RES, D_ASPECT, D_SCALING, D_N };
+enum { C_FREEPLAY, C_FFB, C_FFB_DIR, C_N };      /* the Controls page's rows before the bindings */
 static int nrows(int t)
 {
     switch (t) {
     case T_FILE: return 4;
     case T_DISPLAY: return D_N;
     case T_AUDIO: return 1;
-    case T_CONTROLS: return 1 + RR_ACT_N;
+    case T_CONTROLS: return C_N + RR_ACT_N;
     case T_RECORD: return 1;
     }
     return 0;
@@ -69,7 +70,7 @@ static int nrows(int t)
 static bool has_value(int t, int r)
 {
     if (t == T_DISPLAY || t == T_AUDIO) return true;
-    if (t == T_CONTROLS) return r == 0;
+    if (t == T_CONTROLS) return r < C_N;
     if (t == T_RECORD) return true;
     return false;
 }
@@ -109,9 +110,15 @@ static void row_text(int t, int r, char *label, size_t ln, char *value, size_t v
         break;
     case T_AUDIO: snprintf(label, ln, "Volume"); snprintf(value, vn, "%d%%", g_cfg_volume); break;
     case T_CONTROLS:
-        if (r == 0) { snprintf(label, ln, "Free play"); snprintf(value, vn, "%s", rr_hw_freeplay() ? "ON" : "OFF (coins)"); }
+        if (r == C_FREEPLAY) { snprintf(label, ln, "Free play"); snprintf(value, vn, "%s", rr_hw_freeplay() ? "ON" : "OFF (coins)"); }
+        else if (r == C_FFB) {
+            snprintf(label, ln, "Force feedback");
+            if (g_cfg_ffb_strength) snprintf(value, vn, "%d%%%s", g_cfg_ffb_strength, rr_host_ffb_wheel() ? "" : " (no FFB wheel bound)");
+            else snprintf(value, vn, "OFF");
+        }
+        else if (r == C_FFB_DIR) { snprintf(label, ln, "FFB direction"); snprintf(value, vn, "%s", g_cfg_ffb_invert ? "reversed" : "normal"); }
         else {
-            const int a = r - 1;
+            const int a = r - C_N;
             snprintf(label, ln, "%s", rr_input_action_name(a));
             for (char *c = label; *c; c++) if (*c == '_') *c = ' ';
             if (label[0] >= 'a' && label[0] <= 'z') label[0] = (char)(label[0] - 'a' + 'A');
@@ -160,8 +167,10 @@ static void row_change(int t, int r, int dir)
         rr_host_set_volume(v);
         break; }
     case T_CONTROLS:
-        if (r == 0) rr_host_set_freeplay(!rr_hw_freeplay());
-        else if (dir == 0) { rebinding = r - 1; rr_input_capture_begin(rebinding); }
+        if (r == C_FREEPLAY) rr_host_set_freeplay(!rr_hw_freeplay());
+        else if (r == C_FFB) rr_host_set_ffb_strength(dir ? g_cfg_ffb_strength + 10 * dir : (g_cfg_ffb_strength + 10) % 110);   /* Enter cycles */
+        else if (r == C_FFB_DIR) rr_host_set_ffb_invert(!g_cfg_ffb_invert);
+        else if (dir == 0) { rebinding = r - C_N; rr_input_capture_begin(rebinding); }
         break;
     case T_RECORD: rr_host_toggle_record(); break;
     }

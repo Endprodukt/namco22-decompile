@@ -12,6 +12,7 @@ enum { RR_COIN1, RR_COIN2, RR_SERVICE, RR_TEST, RR_SHIFT_DOWN, RR_SHIFT_UP, RR_V
 typedef struct { SDL_Scancode keys[RR_MAXKEYS]; int nkeys; SDL_GameControllerButton pad; } rr_bind_t;
 extern rr_bind_t g_bind[RR_ACT_N];
 extern int g_steer_speed, g_steer_return, g_pad_deadzone, g_cfg_freeplay;
+extern int g_cfg_ffb_strength, g_cfg_ffb_invert;
 extern int g_cfg_fullscreen, g_cfg_scale, g_cfg_scaling, g_cfg_volume;
 extern int g_cfg_winmode, g_cfg_res_w, g_cfg_res_h, g_cfg_wide, g_cfg_aspect, g_cfg_draw;
 bool rr_input_set_option(const char *path, const char *key, const char *val);

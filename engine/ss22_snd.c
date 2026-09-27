@@ -21,6 +21,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ss22_game.h"
+#include "ss22_input.h"
 #include "m37710.h"
 #include "c352.h"
 #include "audio_out.h"
@@ -167,6 +168,7 @@ static void port_w(void *u, unsigned reg, uint8_t v)
         if (~iocontrol & v & 0x40) outputs = (uint16_t)((outputs & 0x00FF) | outdata << 8);/* d6: strobe out 8-15 */
         iocontrol = v;
     }
+    else if (reg == 0x32) ss22_input_motor(v);                                            /* UART0: the wheel motor's command */
 }
 
 /* ---- lifecycle ---------------------------------------------------------------------------------------- */

@@ -268,7 +268,7 @@ void rr_tick(void)
         }
         if (ss22_host_active() && !ss22_host_frame()) {
             const bool restart = ss22_host_restart_requested();       /* File > Restart: power-cycle the cabinet */
-            ss22_eeprom_save(); ss22_snd_close(); ss22_host_close(); fprintf(stderr, "[%s] quit at frame %u\n", g_ss22_game->tag, rr_frame);
+            ss22_eeprom_save(); ss22_snd_close(); ss22_input_close(); ss22_host_close(); fprintf(stderr, "[%s] quit at frame %u\n", g_ss22_game->tag, rr_frame);
 #ifndef _WIN32
             if (restart) { fflush(NULL); execv("/proc/self/exe", g_argv); perror("restart"); }
 #else

@@ -27,9 +27,12 @@ set(NAMCO22_ENGINE_SS22_SRC
 # THE HOST of the Super 22 games whose 68K is a lifted program (Tokyo Wars, Dirt Dash): the window, the controls, the board (memory map
 # and devices), the master DSP and sound-MCU hosts, the video RAM -> engine, the trace environment and the scheduler/command line
 # (ss22_run.c). A game is one table (src/<game>_game.c, engine/ss22_game.h). Needs the menu group below
+# a cabinet's steering motor on a force-feedback wheel (SDL haptic): Dirt Dash through ss22_input.c, Rave Racer's own host
+set(NAMCO22_ENGINE_FFB_SRC ${NAMCO22_ENGINE_DIR}/eng_ffb.c)
 set(NAMCO22_ENGINE_SS22_HOST_SRC
     ${NAMCO22_ENGINE_DIR}/ss22_host.c
     ${NAMCO22_ENGINE_DIR}/ss22_input.c
+    ${NAMCO22_ENGINE_FFB_SRC}
     ${NAMCO22_ENGINE_DIR}/ss22_board.c
     ${NAMCO22_ENGINE_DIR}/ss22_dsp.c
     ${NAMCO22_ENGINE_DIR}/ss22_snd.c

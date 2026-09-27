@@ -90,7 +90,9 @@ struct m37710_s {
      * 0x0A, P5 at 0x0B, P6 at 0x0E -- namcos22.cpp mcu_port4/5/6). NULL (System 22, and Prop Cycle's
      * own host): a port register just holds what the program wrote, exactly as before. Set (Tokyo
      * Wars): a READ returns port_r(user, reg, latch) -- the host merges the input pins with the
-     * output latch by the direction register -- and a WRITE also calls port_w(user, reg, value). */
+     * output latch by the direction register -- and a WRITE also calls port_w(user, reg, value).
+     * port_w also sees each byte written to UART0's transmit buffer (reg 0x32): on Dirt Dash, the
+     * steering motor's command to the Motor/Feedback PCB. */
     uint8_t      (*port_r)(void *user, unsigned reg, uint8_t latch);
     void         (*port_w)(void *user, unsigned reg, uint8_t value);
 
