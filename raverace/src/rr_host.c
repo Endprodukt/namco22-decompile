@@ -427,6 +427,7 @@ static bool pressed(const SDL_Event *e, int act)
     return e->type == SDL_JOYBUTTONDOWN && rr_input_button_matches(act, SDL_JoystickFromInstanceID(e->jbutton.which), e->jbutton.button);
 }
 
+#define WHEEL_DEADZONE 32             /* of 32767 (0.1% of the lock, 0.3 degrees of the cabinet's 270): a wheel's own sensor noise, nothing more */
 /* analog sources, strongest wins; returns false when every source is neutral */
 static bool pad_steer(int *out)                   /* -32767..32767 */
 {
@@ -438,9 +439,13 @@ static bool pad_steer(int *out)                   /* -32767..32767 */
             if (v > -g_pad_deadzone && v < g_pad_deadzone) v = 0;
             else v = (v > 0 ? v - g_pad_deadzone : v + g_pad_deadzone) * 32767 / (32767 - g_pad_deadzone);
         } else if (rr_input_device_matches(dev[d].js, g_joy_steer.guid) && g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) {
-            v = SDL_JoystickGetAxis(dev[d].js, g_joy_steer.axis);   /* a wheel: no deadzone beyond 1000 */
+            /* a wheel: only a sliver of deadzone, and rescaled to START at its edge. A cut-off +-1000 without the rescale left 3% of
+             * the lock dead and then jumped the steering 0x2B at once: a step exactly at the centre, which the steering motor's
+             * centring then held the wheel against */
+            v = SDL_JoystickGetAxis(dev[d].js, g_joy_steer.axis);
             if (g_joy_steer.invert) v = -v;
-            if (v > -1000 && v < 1000) v = 0;
+            if (v > -WHEEL_DEADZONE && v < WHEEL_DEADZONE) v = 0;
+            else v = (v > 0 ? v - WHEEL_DEADZONE : v + WHEEL_DEADZONE) * 32767 / (32767 - WHEEL_DEADZONE);
         }
         if (abs(v) > abs(best)) best = v;
     }
