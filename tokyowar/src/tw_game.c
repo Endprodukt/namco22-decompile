@@ -46,10 +46,12 @@ static const eng_rom_t k_roms[] = {
     {"tw1scg2.8f", 0x200000},
     {"tw1scg3.7f", 0x200000},
     {"tw1wavea.2l", 0x400000},
-    {"tw2ver-a.1", 0x100000},
-    {"tw2ver-a.2", 0x100000},
-    {"tw2ver-a.3", 0x100000},
-    {"tw2ver-a.4", 0x100000},
+    /* current MAME sets (this project's own reference namcos22.cpp among them) ship these as tw2vera.1-.4, no hyphen; older
+     * archived sets used tw2ver-a.1-.4. Same data either way -- `alt` takes whichever spelling the zip actually has. */
+    {"tw2ver-a.1", 0x100000, NULL, "tw2vera.1"},
+    {"tw2ver-a.2", 0x100000, NULL, "tw2vera.2"},
+    {"tw2ver-a.3", 0x100000, NULL, "tw2vera.3"},
+    {"tw2ver-a.4", 0x100000, NULL, "tw2vera.4"},
 };
 #define NROMS ((int)(sizeof k_roms / sizeof k_roms[0]))
 

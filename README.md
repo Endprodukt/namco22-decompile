@@ -2,7 +2,9 @@
 
 Namco arcade games from the 1990s, rebuilt so they run on a normal
 computer. You need your own copy of each game's files (the MAME versions);
-they are not included here.
+they are not included here. A ROM set from **MAME 0.271 or later** is
+supported; the chip unpacker also accepts a few older chip-name spellings
+where a MAME set has since renamed one (see [docs/ROM_CHECKSUMS.md](docs/ROM_CHECKSUMS.md)).
 
 | Game | Year | Status | Game files you need | Linux | Windows |
 |---|---|---|---|---|---|

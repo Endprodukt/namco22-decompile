@@ -87,6 +87,10 @@ this themselves the first time the game starts, from `tokyowar.zip` in the
 game's `roms` folder. The Japanese set inside the zip (`tokyowarj/`) is a
 different program and is not used.
 
+The program chips are read as either `tw2ver-a.1`-`.4` (older MAME sets) or
+`tw2vera.1`-`.4` (MAME 0.271 and later, which dropped the hyphen) --
+whichever spelling your zip actually has, either is taken.
+
 ## Dirt Dash
 
 Dirt Dash needs one MAME set: `dirtdash.zip` (World, DT2 Ver.A). Give it

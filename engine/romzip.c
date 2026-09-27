@@ -43,15 +43,17 @@ static bool path_is(const char *name, size_t len, const char *want)      /* the 
     return true;
 }
 
-/* Which chip is this zip entry, and how well does its place in the zip fit: rank 2 = the path the chip is expected at, 1 = the top level, 0 = the same
- * file name in some other folder (only for a chip that names a zip path). A MAME set keeps a program set under its own name (dirtdasha/dt2vera.1), but a
- * split set, a zip somebody made by hand or one packed with backslashes does not -- and the Japanese sets carry differently NAMED chips, so the
+/* Which chip is this zip entry, and how well does its place in the zip fit: rank 2 = the path the chip is expected at (or its `alt` spelling
+ * anywhere -- a renamed chip is exactly as good a match as the name we expect), 1 = the top level, 0 = the same file name in some other folder
+ * (only for a chip that names a zip path). A MAME set keeps a program set under its own name (dirtdasha/dt2vera.1), but a split set, a zip
+ * somebody made by hand or one packed with backslashes does not -- and the Japanese sets carry differently NAMED chips, so the
  * name alone never picks a wrong program. -1 = not a chip this game needs. */
 static int rom_index(const char *name, size_t len, const eng_rom_t *k_roms, int NROMS, int *rank)
 {
     for (int i = 0; i < NROMS; i++) {
         const char *want = k_roms[i].zname ? k_roms[i].zname : k_roms[i].name;     /* the entry's full path */
         if (path_is(name, len, want)) { *rank = 2; return i; }
+        if (k_roms[i].alt && path_is(name, len, k_roms[i].alt)) { *rank = 2; return i; }
         if (!k_roms[i].zname) continue;
         if (path_is(name, len, k_roms[i].name)) { *rank = 1; return i; }
         size_t b = len;
