@@ -5,6 +5,7 @@
 #include <math.h>
 #include "ss22_input.h"
 #include "eng_cfg.h"
+#include "eng_ffb.h"
 #include "eng_ui.h"
 
 #define PAD_DEADZONE   4000     /* of 32767: an Xbox pad rests near 3000. 8000 left a quarter of the stick dead, and with the curve below the steering
@@ -161,28 +162,14 @@ static bool key_held(const uint8_t *k, int a)
 
 /* ---- the wheel motor (force feedback) -------------------------------------
  * The cabinet's Motor/Feedback PCB turns each UART0 byte of the MCU into a
- * steering torque (ss22_input_motor). Here it is one SDL constant force on the
- * device the steering axis is bound to. Settings: ffb_strength 0-100 (0 = off)
- * and ffb_invert for a wheel whose driver pushes the other way. */
+ * steering torque (ss22_input_motor), played on the device the steering axis
+ * is bound to (engine/eng_ffb.c). Settings: ffb_strength 0-100 (0 = off) and
+ * ffb_invert for a wheel whose driver pushes the other way. */
 static int ffb_strength = 100;
 static bool ffb_invert;
 static int motor;                                /* the last command, -63..63: negative pushes toward the higher A-D side */
-static SDL_Haptic *haptic;
-static int haptic_effect = -1;
-static SDL_JoystickID ffb_dev = -1;              /* the device last tried, so a wheel without FFB is not retried every frame */
-static int ffb_applied;
 
-static void ffb_close(void)
-{
-    if (haptic && haptic_effect >= 0) {            /* a wheel left holding the last force would keep pushing after we are gone */
-        SDL_HapticStopEffect(haptic, haptic_effect);
-        SDL_HapticDestroyEffect(haptic, haptic_effect);
-    }
-    if (haptic) SDL_HapticClose(haptic);
-    haptic = NULL; haptic_effect = -1;
-}
-
-void ss22_input_close(void) { ffb_close(); }
+void ss22_input_close(void) { eng_ffb_close(); }
 
 /* ---- controller / raw-device discovery ---------------------------------- */
 typedef struct { SDL_GameController *gc; SDL_JoystickID id; } pad_dev;
@@ -224,7 +211,7 @@ static void raw_scan(void)
 {
     for (int i = 0; i < MAX_DEV; i++)
         if (raws[i].js && !SDL_JoystickGetAttached(raws[i].js)) {
-            if (raws[i].id == ffb_dev) { ffb_close(); ffb_dev = -1; }       /* the haptic side goes before its joystick */
+            eng_ffb_forget(raws[i].id);                                  /* the haptic side goes before its joystick */
             SDL_JoystickClose(raws[i].js); memset(&raws[i], 0, sizeof raws[i]); raws[i].id = -1;
         }
 
@@ -257,71 +244,22 @@ static int raw_slot_for(const raw_axis_bind *b)
     return -1;
 }
 
-/* SDL's direction is where a force comes FROM: along +x a positive level pushes toward the axis' negative end */
-static SDL_HapticEffect ffb_effect(int level)
-{
-    SDL_HapticEffect e;
-    memset(&e, 0, sizeof e);
-    e.type = SDL_HAPTIC_CONSTANT;
-    e.constant.direction.type = SDL_HAPTIC_CARTESIAN;
-    e.constant.direction.dir[0] = 1;
-    e.constant.length = SDL_HAPTIC_INFINITY;
-    e.constant.level = (Sint16)level;
-    return e;
-}
-
-/* the steering device's haptic side: opened once per device (again after a hot-plug or a rebind) */
+/* the steering device's haptic side (engine/eng_ffb.c opens it once per device) */
 static bool ffb_device(void)
 {
     const int d = raw_slot_for(&joy_steer);
-    const SDL_JoystickID id = d >= 0 && joy_steer.axis >= 0 ? raws[d].id : -1;
-    if (id == ffb_dev) return haptic_effect >= 0;
-    ffb_close();
-    ffb_dev = id;
-    if (id < 0) return false;
-    if (!SDL_JoystickIsHaptic(raws[d].js) || !(haptic = SDL_HapticOpenFromJoystick(raws[d].js))) {
-        fprintf(stderr, "[FFB] %s: no force feedback\n", raws[d].name);
-        return false;
-    }
-    const unsigned q = SDL_HapticQuery(haptic);
-    if (!(q & SDL_HAPTIC_CONSTANT)) {
-        fprintf(stderr, "[FFB] %s: no constant force\n", raws[d].name);
-        ffb_close();
-        return false;
-    }
-    if (q & SDL_HAPTIC_AUTOCENTER) SDL_HapticSetAutocenter(haptic, 0);        /* the motor is the only force, as in the cabinet */
-    if (q & SDL_HAPTIC_GAIN) SDL_HapticSetGain(haptic, 100);
-    SDL_HapticEffect e = ffb_effect(0);
-    haptic_effect = SDL_HapticNewEffect(haptic, &e);
-    if (haptic_effect < 0 || SDL_HapticRunEffect(haptic, haptic_effect, 1) != 0) {
-        fprintf(stderr, "[FFB] %s: %s\n", raws[d].name, SDL_GetError());
-        ffb_close();
-        return false;
-    }
-    ffb_applied = 0;
-    static bool at_exit;
-    if (!at_exit) { atexit(ss22_input_close); at_exit = true; }      /* every way out (menu Quit, the window's X, --frames) ends in exit() */
-    fprintf(stderr, "[FFB] %s drives the wheel motor\n", raws[d].name);
-    return true;
+    return eng_ffb_device(d >= 0 && joy_steer.axis >= 0 ? raws[d].js : NULL);
 }
 
 static void ffb_apply(void)
 {
-    if (!game->wheel_motor || !ffb_device()) return;
-    /* a negative command pushes toward the higher A-D side: the axis' positive end unless the steering axis is inverted */
-    int level = motor * 32767 / 63 * ffb_strength / 100;
-    if (joy_steer.invert != ffb_invert) level = -level;
-    if (level == ffb_applied) return;
-    SDL_HapticEffect e = ffb_effect(level);
-    if (SDL_HapticUpdateEffect(haptic, haptic_effect, &e) == 0) ffb_applied = level;
+    if (game->wheel_motor && ffb_device()) eng_ffb_force(motor, ffb_strength, joy_steer.invert != ffb_invert);
 }
 
 void ss22_input_motor(uint8_t b)
 {
     if (!game || !game->wheel_motor) return;
-    int r = 0;                                                     /* bits 2-7, bit order reversed */
-    for (int i = 0; i < 6; i++) if (b >> (2 + i) & 1) r |= 1 << (5 - i);
-    motor = !(b & 1) ? 0 : (b & 2) ? r - 63 : 63 - r;
+    motor = eng_ffb_decode(b);
     ffb_apply();
 }
 
@@ -489,7 +427,6 @@ void ss22_input_init(const ss22_input_game *g)
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
     SDL_InitSubSystem(SDL_INIT_GAMECONTROLLER);
     if (g->wheel_motor) {
-        if (SDL_InitSubSystem(SDL_INIT_HAPTIC) != 0) fprintf(stderr, "[FFB] SDL haptic: %s\n", SDL_GetError());
         ffb_strength = eng_cfg_int("ffb_strength", 100);
         if (ffb_strength < 0) ffb_strength = 0;
         if (ffb_strength > 100) ffb_strength = 100;
