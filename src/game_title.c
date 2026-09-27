@@ -322,7 +322,7 @@ uint16_t state_attract_run(void)
     case 1:  FUN_0000c970(); break;   /* title-logo run (billboard + sprites) */
     case 2:  FUN_0000ca80(); break;   /* Cinematic flyover init */
     case 3:  FUN_0000cbf2(); break;   /* Cinematic flyover run */
-    case 4:  attract_gameplay_tick(); break;  /* 0x00D05C: gameplay replay init/tick */
+    case 4:  attract_gameplay_init(); break;  /* 0x00D05C: gameplay replay init, then the tick */
     case 5:  attract_gameplay_tick(); break;  /* Gameplay replay tick */
     case 6:  highscore_display_init(); break; /* High score display init */
     case 7:  highscore_display_run(); break;  /* High score display run */
@@ -2072,6 +2072,48 @@ void attract_cinematic_init(void)
   W[0x0CC4] = 0x13;
   attract_cinematic_tick();
   return;
+}
+
+/* ---- attract_gameplay_init @ 0x00D05C ---- */
+/* Case 4's own handler, disassembled from the ROM (0x00D05C..0x00D132). Case 4
+ * used to run the case-5 tick instead, so none of this happened: the replay
+ * pointer stayed 0 and the demo "played" whatever bytes are at ROM address 0,
+ * the phase never reached 5 (it sat in case 4 for 2700 frames), and the
+ * caption plank -- block 0 at tile 0x120 on palette 1, drawn by
+ * attract_text_stage_labels -- showed what the start-up preload had left in
+ * those tiles: a bar of noise under PRESS THE START BUTTON. */
+void attract_gameplay_init(void)
+{
+  int i;
+  W[0x15EB8] = 0;
+  W[0x15EBC] = -1;
+  W[0x16D7C] = 0x190AD0;                      /* the demo's replay, a ROM address */
+  W[0x15BE0] = 0xa00;
+  W[0x15EC4] = -1;
+  W[0x15EC8] = (int32_t)vrd32(0x35320);
+  W[0x15BE4] = 0;
+  /* jsr $2106A: the text layer cleared to tile 0x20, its scroll zeroed */
+  mem_write8(0x82400D, 0);
+  mem_write16(0x8A0002, 0);
+  for (i = 0; i < 0x1000; i++) mem_write16(0x89E000 + i * 2, 0x20);
+  W[0x0C8C] = (int32_t)vrd32(0x190AD0);       /* move.l (a0) -- a0 = the replay pointer */
+  W[0x012BC] = 0;
+  W16_SET(0xE10, 0);
+  gameplay_init_player_and_world();           /* 0x00AD70 */
+  gameplay_init_state_vars();                 /* 0x00AEB8 */
+  W[0x0E44] = 0xe10;
+  W[0x0E48] = 0xe10;
+  W[0xEB1A] = 0;
+  W[0xEB1C] = 0;
+  W[0xEB1E] = 0;
+  W[0x1703C] = 0;
+  W[0x15ED0] = 0xff;
+  W[0xEB18] = 3;
+  cgram_load_tile_block(0, 0x120);            /* the plank */
+  cz_load_color_ramp(0, 1);
+  cz_load_color_ramp(0xf8, 5);                /* the captions' text */
+  W[0x0CC4] = 5;
+  attract_gameplay_tick();
 }
 
 /* ---- attract_gameplay_tick ---- */

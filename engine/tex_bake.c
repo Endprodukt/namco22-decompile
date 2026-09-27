@@ -347,7 +347,19 @@ static int tex_cache_total = 0;
 /* Static pixel buffer for baking (TEX_BAKE_MAX^2 RGBA, reused each bake) */
 static uint8_t tex_pixel_buf[(1024 + 1) * (1024 + 1) * 4];   /* up to the 1024 cap + guard texel */
 
+/* Texture names in batches. glGenTextures returns a value, so a threaded GL driver (NVIDIA on Windows) makes every call wait for its
+ * worker thread: one call per new texture was ~30 us each there, 21 ms of a scene change's first frame (637 new textures). */
+#define GEN_BATCH 512
+static GLuint gen_pool[GEN_BATCH];
+static int    gen_n;
+static GLuint gen_texture(void)
+{
+    if (!gen_n) { glGenTextures(GEN_BATCH, gen_pool); gen_n = GEN_BATCH; }
+    return gen_pool[--gen_n];
+}
+
 void renderer_texture_init(void) {
+    if (gen_n) { glDeleteTextures(gen_n, gen_pool); gen_n = 0; }
     /* Delete any live textures rather than just dropping the entries --
      * calling this a second time would otherwise orphan every texture the
      * cache holds. Safe at startup: occupied is zero, so nothing is freed. */
@@ -692,7 +704,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     int had_w = slotp->alloc_w, had_h = slotp->alloc_h;
     if (!tex) {
         tex = tex_free_pop(tw, th, &had_w, &had_h);
-        if (!tex) { glGenTextures(1, &tex); had_w = had_h = 0; }
+        if (!tex) { tex = gen_texture(); had_w = had_h = 0; }
     }
     glBindTexture(GL_TEXTURE_2D, tex);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);

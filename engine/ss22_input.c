@@ -2,11 +2,15 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <math.h>
 #include "ss22_input.h"
 #include "eng_cfg.h"
 #include "eng_ui.h"
 
-#define PAD_DEADZONE   8000
+#define PAD_DEADZONE   4000     /* of 32767: an Xbox pad rests near 3000. 8000 left a quarter of the stick dead, and with the curve below the steering
+                                * all came in the stick's outer half -- easing off a turn dropped it back towards the centre */
+#define STICK_RATE     0x50     /* the most the stick moves the wheel in a frame (centre to full lock ~0.1 s): a stick flicked or let go
+                                * jumped the wheel the whole way in one frame, and the car jerked */
 #define WHEEL_DEADZONE 1000
 #define MAX_ACTIONS    16
 #define MAX_DEV        8
@@ -15,6 +19,13 @@
 static const ss22_input_game *game;
 static SDL_Scancode bound[MAX_ACTIONS];
 static int rebinding = -1;                       /* action waiting for a key, button or axis, or -1 */
+/* The stick's travel past the deadzone, t in 0..1, steers t^curve of full lock. A thumbstick's short throw driving the wheel linearly
+ * was too sensitive to steer with ("controls too sensitive" on a pad); a curve keeps the centre fine and still reaches full lock. */
+static const struct { const char *name; double curve; } steer_levels[] = {
+    { "Linear", 1.0 }, { "Medium", 1.5 }, { "Smooth", 2.0 }, { "Very smooth", 2.5 } };
+#define STEER_N ((int)(sizeof steer_levels / sizeof *steer_levels))
+#define STEER_DEFAULT 1
+static int steer_level = STEER_DEFAULT;
 static bool test_latch, test_prev[MAX_ACTIONS];
 static int service_frames;
 
@@ -123,6 +134,15 @@ static void bindings_load(void)
             if (sc != SDL_SCANCODE_UNKNOWN) bound[a] = sc;
         }
     }
+    steer_level = eng_cfg_int("stick_steering", STEER_DEFAULT);
+    if (steer_level < 0 || steer_level >= STEER_N) steer_level = STEER_DEFAULT;
+}
+
+static void steer_set(int level)
+{
+    steer_level = level;
+    eng_cfg_set_int("stick_steering", level);
+    fprintf(stderr, "[INPUT] stick steering = %s (saved)\n", steer_levels[level].name);
 }
 
 static void binding_set(int a, SDL_Scancode sc)
@@ -279,8 +299,8 @@ static void axis_label(int kind, char *v, size_t vn)
 }
 
 static int nsw(void) { return (game->test_bit ? 1 : 0) + (game->service_bit ? 1 : 0); }
-static int pg_n(void) { return nsw() + 1 + game->n; }
-static bool pg_val(int r) { (void)r; return false; }
+static int pg_n(void) { return nsw() + 2 + game->n; }             /* the switches, Reset, Stick steering, the actions */
+static bool pg_val(int r) { return r == nsw() + 1; }
 
 static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
 {
@@ -289,7 +309,8 @@ static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
     if (game->service_bit && r == (game->test_bit ? 1 : 0)) { snprintf(l, ln, "Service button"); snprintf(v, vn, "press"); return; }
     r -= nsw();
     if (r == 0) { snprintf(l, ln, "Reset keyboard defaults"); return; }
-    r--;
+    if (r == 1) { snprintf(l, ln, "Stick steering"); snprintf(v, vn, "%s", steer_levels[steer_level].name); return; }
+    r -= 2;
     const int a = r;
     snprintf(l, ln, "%s", game->actions[a].label);
     if (rebinding == a) {
@@ -313,15 +334,21 @@ static void pg_text(int r, char *l, size_t ln, char *v, size_t vn)
 
 static void pg_change(int r, int dir)
 {
+    if (r == nsw() + 1) {                                /* Stick steering: left/right step through the levels, a press moves on (wrapping) */
+        const int lv = dir < 0 ? steer_level - 1 : dir > 0 ? steer_level + 1 : (steer_level + 1) % STEER_N;
+        if (lv >= 0 && lv < STEER_N) steer_set(lv);
+        return;
+    }
     if (dir != 0) return;
     if (game->test_bit && r == 0) { test_latch = !test_latch; fprintf(stderr, "[INPUT] test switch %s\n", test_latch ? "ON" : "OFF"); eng_ui_set_open(false); return; }
     if (game->service_bit && r == (game->test_bit ? 1 : 0)) { service_frames = 12; eng_ui_set_open(false); return; }
     r -= nsw();
     if (r == 0) {
         for (int a = 0; a < game->n; a++) if (bound[a] != game->actions[a].def) binding_set(a, game->actions[a].def);
+        if (steer_level != STEER_DEFAULT) steer_set(STEER_DEFAULT);
         return;
     }
-    r--;
+    r -= 2;
     rebinding = r;
     axis_capture_begin(action_axis(r));
     eng_ui_capture_input(capture_input, NULL);
@@ -500,19 +527,19 @@ void ss22_input_update(void)
     const int dir = right - left;
     const unsigned centre = (unsigned)((game->wheel_min + game->wheel_max) / 2);
     const unsigned wt = (unsigned)((int)centre + dir * game->wheel_key_span);
-    wheel = ramp(wheel, wt, (unsigned)game->wheel_step);
     for (int i = 0; i < 2; i++)
         pedal[i] = ramp(pedal[i], pk[i] ? (unsigned)game->pedal_max[i] : 0, (unsigned)game->pedal_step);
 
-    /* Standard gamepads. */
+    /* Standard gamepads: a stick out of its deadzone steers, and wins over the keys. */
     bool stick = false;
+    unsigned stick_wheel = centre;
     for (int i = 0; i < MAX_DEV; i++) {
         SDL_GameController *c = pads[i].gc;
         if (!c) continue;
         const int lx = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX);
         if (lx > PAD_DEADZONE || lx < -PAD_DEADZONE) {
-            const double t = ((lx < 0 ? -lx : lx) - PAD_DEADZONE) / (32767.0 - PAD_DEADZONE);
-            wheel = (unsigned)((int)centre + (lx < 0 ? -1 : 1) * (int)(t * game->wheel_key_span));
+            const double t = pow(((lx < 0 ? -lx : lx) - PAD_DEADZONE) / (32767.0 - PAD_DEADZONE), steer_levels[steer_level].curve);
+            stick_wheel = (unsigned)((int)centre + (lx < 0 ? -1 : 1) * (int)(t * game->wheel_key_span));
             stick = true;
         }
         const int rt = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT);
@@ -534,8 +561,11 @@ void ss22_input_update(void)
     }
 
     { static bool stick_drove;
-      if (stick) stick_drove = true;
-      else if (stick_drove) { stick_drove = false; if (dir == 0) wheel = centre; } }
+      if (stick) { stick_drove = true; wheel = ramp(wheel, stick_wheel, STICK_RATE); }
+      else if (stick_drove && dir == 0) {                /* let go: back to centre at the stick's pace, not the keys' (PORT_KEYDELTA counts a */
+          wheel = ramp(wheel, centre, STICK_RATE);       /* frame, ~0.35 s: the car kept steering after the stick was released) */
+          if (wheel == centre) stick_drove = false;
+      } else { stick_drove = false; wheel = ramp(wheel, wt, (unsigned)game->wheel_step); } }
 
     /* A raw wheel is absolute while it is moving; when centred, keyboard/pad remain usable. */
     { static bool raw_drove;

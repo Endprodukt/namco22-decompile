@@ -52,9 +52,10 @@ int eng_fog_alpha(const eng_fog *f, int32_t z)
 }
 
 static int g_sort_tie_emit;
+typedef struct { int32_t zsort; int order; int idx; } quad_key;
 static int zcmp(const void *a, const void *b)
 {
-    const geo_quad *qa = (const geo_quad *)a, *qb = (const geo_quad *)b;
+    const quad_key *qa = (const quad_key *)a, *qb = (const quad_key *)b;
     if (qa->zsort != qb->zsort)
         return (qa->zsort > qb->zsort) ? -1 : 1;   /* far (large) first */
     /* TIES DRAW IN REVERSE SUBMISSION ORDER -- the FIRST quad emitted at a
@@ -66,10 +67,35 @@ static int zcmp(const void *a, const void *b)
     return (qa->order > qb->order) ? -1 : (qa->order < qb->order) ? 1 : 0;
 }
 
+/* Sorts small keys, then moves each quad once. A geo_quad is ~1 KB and the Windows C runtime's qsort swaps elements
+ * a byte at a time: sorting the quads themselves cost ~9 ms a frame there (glibc's merge sort hid it on Linux).
+ * `order` is unique per quad, so the order is total and the result is the same whatever the sort. */
 void eng_quad_sort(geo_quad *buf, int n, int tie_emit)
 {
+    static quad_key *keys;
+    static int cap;
+    if (n < 2) return;
+    if (n > cap) {
+        quad_key *k = realloc(keys, (size_t)n * sizeof *k);
+        if (!k) return;
+        keys = k; cap = n;
+    }
+    for (int i = 0; i < n; i++) { keys[i].zsort = buf[i].zsort; keys[i].order = buf[i].order; keys[i].idx = i; }
     g_sort_tie_emit = tie_emit;
-    qsort(buf, (size_t)n, sizeof buf[0], zcmp);
+    qsort(keys, (size_t)n, sizeof keys[0], zcmp);
+    /* apply the permutation in place, one cycle at a time: slot j takes the quad from keys[j].idx */
+    for (int i = 0; i < n; i++) {
+        if (keys[i].idx == i) continue;
+        geo_quad held = buf[i];
+        int j = i;
+        for (;;) {
+            const int k = keys[j].idx;
+            keys[j].idx = j;
+            if (k == i) { buf[j] = held; break; }
+            buf[j] = buf[k];
+            j = k;
+        }
+    }
 }
 
 /* ---- screen-space polygon clip -----------------------------------------
@@ -141,7 +167,15 @@ static int clip_to_screen(const geo_sv *in, int n, geo_sv *out)
  * it -- identical geometry, identical attributes, byte-identical output. */
 static float qa_xy[32 * 2], qa_rgba[32 * 4], qa_st[32 * 4];
 
+/* read once per batch, not per quad: every glGet makes a threaded GL driver (NVIDIA on Windows) wait for its worker thread */
+static GLint draw_vp[4];
+
 void eng_draw_begin(void)
+{
+    glGetIntegerv(GL_VIEWPORT, draw_vp);
+    eng_draw_resume();
+}
+void eng_draw_resume(void)
 {
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
@@ -238,8 +272,7 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
          * 640x480 scene pixels a larger window cut the ending's credits
          * window and the name-entry lens down to a corner (register row 192).
          * Headless (viewport 0,0,640,480) is unchanged. */
-        GLint vp[4];
-        glGetIntegerv(GL_VIEWPORT, vp);
+        const GLint *vp = draw_vp;
         double kx = (double)vp[2] / (g_scene_x1 - g_scene_x0), ky = (double)vp[3] / ENG_SCREEN_H;
         int x0 = vp[0] + (int)((cminx - g_scene_x0) * kx + 0.5);
         int x1 = vp[0] + (int)((cmaxx + 1 - g_scene_x0) * kx + 0.5);
@@ -273,8 +306,7 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
         }
         if (x0 < cminx) x0 = cminx;  if (x1 > cmaxx) x1 = cmaxx;
         if (y0 < cminy) y0 = cminy;  if (y1 > cmaxy) y1 = cmaxy;
-        GLint vp[4];
-        glGetIntegerv(GL_VIEWPORT, vp);
+        const GLint *vp = draw_vp;
         double kx = (double)vp[2] / (g_scene_x1 - g_scene_x0), ky = (double)vp[3] / ENG_SCREEN_H;
         int w = (int)((x1 - x0 + 1) * kx), h = (int)((y1 - y0 + 1) * ky);
         g_tex_bake_cap_req = w > h ? w : h;

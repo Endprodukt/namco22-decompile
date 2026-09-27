@@ -379,7 +379,11 @@ static void draw_text(void)
     glBindTexture(GL_TEXTURE_2D, txt_tex);
     const bool split = shade_split && g_eng_hud_e != 0;             /* a moving HUD over a shade: the text alone here, the shade in its own texture */
     static bool tex_split;
-    if (txt_dirty || prio_any || tex_masked || split != tex_split) {          /* upload: the text as rendered, less what a sprite over the text layer covers */
+    /* the texture already holds this text under this mask: a race's HUD sprites mask it every frame, and re-sending the same 1.2 MB each
+     * time cost ~2 ms a frame on Windows */
+    static uint8_t last_mask[SPR_W * SPR_H];
+    const bool mask_changed = prio_any != tex_masked || (prio_any && memcmp(prio_mask, last_mask, sizeof last_mask) != 0);
+    if (txt_dirty || mask_changed || split != tex_split) {          /* upload: the text as rendered, less what a sprite over the text layer covers */
         static uint8_t *masked;
         const uint8_t *src = split ? only_buf : txt_buf, *src2 = split ? shd_buf : NULL;
         if (prio_any) {
@@ -399,6 +403,7 @@ static void draw_text(void)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, SPR_W, SPR_H, GL_RGBA, GL_UNSIGNED_BYTE, src2);
             glBindTexture(GL_TEXTURE_2D, txt_tex);
         }
+        if (prio_any) memcpy(last_mask, prio_mask, sizeof last_mask);
         tex_masked = prio_any; tex_split = split; txt_dirty = false;
     }
     glEnable(GL_TEXTURE_2D);
@@ -481,7 +486,7 @@ void ss22_draw(int vw, int vh)
     while (qi < qn || si < ni) {
         const uint32_t qz = qi < qn ? (uint32_t)(qbuf[qi].zsort & 0xFFFFFF) : 0;
         const uint32_t sz = si < ni ? items[si].z : 0;
-        if (si < ni && (qi >= qn || sz >= qz)) { eng_draw_end(); draw_sprite(&items[si++]); eng_draw_begin(); }
+        if (si < ni && (qi >= qn || sz >= qz)) { eng_draw_end(); draw_sprite(&items[si++]); eng_draw_resume(); }
         else eng_draw_quad(&qbuf[qi++], &cfg);
     }
     eng_draw_end();
