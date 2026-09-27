@@ -7,6 +7,12 @@
 #ifdef _WIN32
 #include "../../include/win_compat.h"
 
+/* The Win32 headers define this obsolete memory-model keyword; the lifted
+ * game code uses 'near' as a normal variable name. */
+#ifdef near
+#undef near
+#endif
+
 /* sysconf(_SC_NPROCESSORS_ONLN): the renderer's thread count -- SDL knows it */
 #ifndef _SC_NPROCESSORS_ONLN
 #define _SC_NPROCESSORS_ONLN 84
