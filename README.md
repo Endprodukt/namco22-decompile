@@ -112,6 +112,9 @@ Put the game files in its `roms` folder: `propcycl.zip` for Prop Cycle,
 Wars, `dirtdash.zip` for Dirt Dash. Then double-click **PropCycle.exe**,
 **RaveRacer.exe**, **TokyoWars.exe** or **DirtDash.exe**.
 
+Building on Windows itself, and what in the code is there for Windows only:
+[docs/WINDOWS.md](docs/WINDOWS.md).
+
 ## How to play
 
 **Prop Cycle.** You fly a pedal-powered glider and pop balloons.
@@ -179,6 +182,10 @@ A game controller works in all the games. In Rave Racer the keys can be
 changed in `raverace/rr_controls.cfg`; in Tokyo Wars and Dirt Dash, in the menu
 (**Controls**) or in `tokyowar/tw_controls.cfg` / `dirtdash/dd_controls.cfg`.
 
+**Steering with the stick** (Tokyo Wars and Dirt Dash): *Esc > Controls > Stick steering* sets how the stick turns
+the wheel. **Medium** (the default) is gentle near the centre and still reaches full lock at the edge; **Smooth** and
+**Very smooth** are gentler still; **Linear** turns the wheel in step with the stick.
+
 **On a game pad or a Steam Deck** (no keyboard): the menu opens with **R3**
 (click the right stick) or by **holding Start for a second** (a quick tap is
 still the game's own Start). The cabinet's **Test mode** (the service switch,
@@ -239,7 +246,7 @@ Press `Esc` and open **Display**. Your choices are saved by themselves.
 - **"c71.bin is missing"**: that message is from an older version. The DSP's BIOS is built in now, so
   `c71.bin` and `namcoc71.zip` are not needed; update to a current build.
 - **Black or white screen**: update your graphics driver.
-- **Slow, or the picture stutters.** Open the game's log (`raveracer.log`, `tokyowars.log`, `dirtdash.log`,
+- **Slow, or the picture stutters.** Open the game's log (`raveracer.log`, `tokyowar.log`, `dirtdash.log`,
   `propcycl.log` beside the `.exe` on Windows; the terminal window on Linux) and look at these lines:
   - `[HOST] OpenGL: ...` (Prop Cycle: `OpenGL: ...`) names the graphics chip the game is using. It should be
     your graphics card, for example *NVIDIA GeForce RTX 3050 Ti*. If a laptop with **two** graphics chips shows the

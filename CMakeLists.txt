@@ -81,6 +81,9 @@ if(WIN32)
 endif()
 set(OpenGL_GL_PREFERENCE GLVND)
 find_package(OpenGL REQUIRED)
+if(WIN32)
+  set(ZLIB_USE_STATIC_LIBS ON)   # MSYS2's zlib comes as a DLL too: link the static one, or the .exe needs zlib1.dll (CMake 3.24+)
+endif()
 find_package(ZLIB REQUIRED)
 
 # THE SHARED ENGINE (engine/): one renderer, texture bake, C352 and sound-MCU

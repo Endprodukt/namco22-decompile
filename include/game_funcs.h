@@ -719,6 +719,7 @@ void attract_course_load();
 void attract_draw_text_overlay();
 void attract_flyover_text();
 void attract_flyover_tick();
+void attract_gameplay_init();
 void attract_gameplay_tick();
 void attract_highscore_overlay_draw();
 void attract_logo_init();

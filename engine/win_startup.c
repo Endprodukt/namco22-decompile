@@ -18,7 +18,9 @@ void eng_win_startup(const char *logname)
     }
     if (freopen(logname, "w", stdout)) {
         setvbuf(stdout, NULL, _IONBF, 0);
+        freopen("NUL", "w", stderr);            /* a double-clicked GUI program's stderr is a closed stream: reopen it before redirecting */
         _dup2(_fileno(stdout), _fileno(stderr));
+        setvbuf(stderr, NULL, _IONBF, 0);
     }
     SDL_SetHint(SDL_HINT_WINDOWS_DPI_AWARENESS, "permonitorv2");
 }

@@ -510,7 +510,9 @@ int main(int argc, char* argv[]) {
      * propcycl.log beside the exe -- the first thing to read when it fails. */
     if (freopen("propcycl.log", "w", stdout)) {
         setvbuf(stdout, NULL, _IONBF, 0);
+        freopen("NUL", "w", stderr);            /* a double-clicked GUI program's stderr is a closed stream: reopen it before redirecting */
         _dup2(_fileno(stdout), _fileno(stderr));
+        setvbuf(stderr, NULL, _IONBF, 0);
     }
     /* Report real pixel sizes; without this Windows stretches the window by
      * the display scaling (150% turns 1280x960 into 1920x1440). */

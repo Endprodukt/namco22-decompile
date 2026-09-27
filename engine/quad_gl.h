@@ -54,7 +54,8 @@ typedef struct {
  * is MAME's radix bucket behaviour. tie_emit = 1: emission order (A/B only). */
 void eng_quad_sort(geo_quad *buf, int n, int tie_emit);
 
-void eng_draw_begin(void);          /* client vertex arrays on */
+void eng_draw_begin(void);          /* client vertex arrays on, and the viewport read for the batch */
+void eng_draw_resume(void);         /* arrays back on after a break in the same batch (the viewport has not changed) */
 void eng_draw_quad(const geo_quad *q, const eng_draw_cfg *cfg);
 void eng_draw_end(void);
 
