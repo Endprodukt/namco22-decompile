@@ -44,7 +44,7 @@ extern int g_rr_gl;     /* rr_main.c: 1 = the engine's GL renderer, 0 = the soft
  * anything in a gamecontrollerdb.txt next to the binary), otherwise as a RAW
  * joystick mapped by axis/button number from rr_controls.cfg (wheels, pedals,
  * arcade sticks). Hot-plug either way. */
-#define MAX_DEV 4
+#define MAX_DEV 16
 static struct { SDL_GameController *gc; SDL_Joystick *js; SDL_JoystickID id; } dev[MAX_DEV];
 
 static void dev_scan(void)
@@ -69,6 +69,7 @@ static void dev_scan(void)
 }
 static void dev_remove(SDL_JoystickID id)
 {
+    g_joy_gas.rest_valid = g_joy_brake.rest_valid = false;
     for (int d = 0; d < MAX_DEV; d++)
         if ((dev[d].gc || dev[d].js) && dev[d].id == id) {
             fprintf(stderr, "[HOST] controller %d removed\n", d);
@@ -76,11 +77,6 @@ static void dev_remove(SDL_JoystickID id)
             if (dev[d].js) SDL_JoystickClose(dev[d].js);
             dev[d].gc = NULL; dev[d].js = NULL;
         }
-}
-static bool dev_is_raw(SDL_JoystickID id)
-{
-    for (int d = 0; d < MAX_DEV; d++) if (dev[d].js && dev[d].id == id) return true;
-    return false;
 }
 static void load_pad_db(void)
 {
@@ -408,7 +404,8 @@ static bool held(int act)
     for (int i = 0; i < g_bind[act].nkeys; i++) if (k[g_bind[act].keys[i]]) return true;
     for (int d = 0; d < MAX_DEV; d++) {
         if (dev[d].gc && g_bind[act].pad != SDL_CONTROLLER_BUTTON_INVALID && SDL_GameControllerGetButton(dev[d].gc, g_bind[act].pad)) return true;
-        if (dev[d].js && g_joy_button[act] >= 0 && SDL_JoystickGetButton(dev[d].js, g_joy_button[act])) return true;
+        SDL_Joystick *js = dev[d].gc ? SDL_GameControllerGetJoystick(dev[d].gc) : dev[d].js;
+        if (rr_input_button_matches(act, js, g_joy_button[act]) && SDL_JoystickGetButton(js, g_joy_button[act])) return true;
     }
     return false;
 }
@@ -418,7 +415,7 @@ static bool pressed(const SDL_Event *e, int act)
         for (int i = 0; i < g_bind[act].nkeys; i++) if (e->key.keysym.scancode == g_bind[act].keys[i]) return true;
     }
     if (e->type == SDL_CONTROLLERBUTTONDOWN && g_bind[act].pad != SDL_CONTROLLER_BUTTON_INVALID && e->cbutton.button == g_bind[act].pad) return true;
-    return e->type == SDL_JOYBUTTONDOWN && dev_is_raw(e->jbutton.which) && g_joy_button[act] >= 0 && e->jbutton.button == g_joy_button[act];
+    return e->type == SDL_JOYBUTTONDOWN && rr_input_button_matches(act, SDL_JoystickFromInstanceID(e->jbutton.which), e->jbutton.button);
 }
 
 /* analog sources, strongest wins; returns false when every source is neutral */
@@ -431,7 +428,7 @@ static bool pad_steer(int *out)                   /* -32767..32767 */
             v = SDL_GameControllerGetAxis(dev[d].gc, SDL_CONTROLLER_AXIS_LEFTX);
             if (v > -g_pad_deadzone && v < g_pad_deadzone) v = 0;
             else v = (v > 0 ? v - g_pad_deadzone : v + g_pad_deadzone) * 32767 / (32767 - g_pad_deadzone);
-        } else if (dev[d].js && g_joy_steer.axis >= 0) {
+        } else if (rr_input_device_matches(dev[d].js, g_joy_steer.guid) && g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) {
             v = SDL_JoystickGetAxis(dev[d].js, g_joy_steer.axis);   /* a wheel: no deadzone beyond 1000 */
             if (g_joy_steer.invert) v = -v;
             if (v > -1000 && v < 1000) v = 0;
@@ -446,16 +443,15 @@ static bool pad_steer(int *out)                   /* -32767..32767 */
 static bool pad_pedal(bool gas, int *out)         /* 0..0x610 */
 {
     int best = 0;
-    const rr_joyaxis_t *ax = gas ? &g_joy_gas : &g_joy_brake;
+    rr_joyaxis_t *ax = gas ? &g_joy_gas : &g_joy_brake;
     for (int d = 0; d < MAX_DEV; d++) {
         int v = 0;
         if (dev[d].gc) {
             int t = SDL_GameControllerGetAxis(dev[d].gc, gas ? SDL_CONTROLLER_AXIS_TRIGGERRIGHT : SDL_CONTROLLER_AXIS_TRIGGERLEFT);
             if (t > 1000) v = (t - 1000) * 0x610 / (32767 - 1000);
-        } else if (dev[d].js && ax->axis >= 0) {
+        } else if (rr_input_device_matches(dev[d].js, ax->guid) && ax->axis >= 0 && ax->axis < SDL_JoystickNumAxes(dev[d].js)) {
             int r = SDL_JoystickGetAxis(dev[d].js, ax->axis);
-            double f = ax->half ? (r < 0 ? 0.0 : r / 32767.0) : (r + 32768) / 65535.0;
-            if (ax->invert) f = 1.0 - f;
+            double f = rr_input_pedal_value(ax, r);
             if (f > 0.03) v = (int)((f - 0.03) / 0.97 * 0x610);
         }
         if (v > best) best = v;

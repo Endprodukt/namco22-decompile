@@ -40,8 +40,9 @@ int g_pad_deadzone = 8000;          /* of 32767; a real Xbox One pad here rests 
  * with `rr --joytest`. An axis spec is "<n>[ invert][ half]": half = a pedal
  * that uses only 0..32767; otherwise the full -32768..32767 travel maps to
  * 0..max (pedals usually rest at one end). -1 = unmapped. */
-rr_joyaxis_t g_joy_steer = { 0, false, false }, g_joy_gas = { -1, false, false }, g_joy_brake = { -1, false, false };
+rr_joyaxis_t g_joy_steer = { .axis = 0 }, g_joy_gas = { .axis = -1 }, g_joy_brake = { .axis = -1 };
 int g_joy_button[RR_ACT_N];
+char g_joy_button_guid[RR_ACT_N][40];
 
 static const char *act_name[RR_ACT_N] = {
     "coin1", "coin2", "service", "test", "shift_down", "shift_up", "view",
@@ -65,8 +66,9 @@ static void set_default(int a, const char *keys, const char *pad)
 static void defaults(void)
 {
     for (int a = 0; a < RR_ACT_N; a++) g_joy_button[a] = -1;
-    g_joy_steer = (rr_joyaxis_t){ 0, false, false };
-    g_joy_gas = g_joy_brake = (rr_joyaxis_t){ -1, false, false };
+    memset(g_joy_button_guid, 0, sizeof g_joy_button_guid);
+    g_joy_steer = (rr_joyaxis_t){ .axis = 0 };
+    g_joy_gas = g_joy_brake = (rr_joyaxis_t){ .axis = -1 };
     set_default(RR_COIN1, "5", "back");
     set_default(RR_COIN2, "6", NULL);
     set_default(RR_SERVICE, "9", NULL);
@@ -125,9 +127,24 @@ void rr_input_load(const char *path)
         if (!strcmp(k, "scaling")) {
             g_cfg_scaling = !strcmp(v, "sharp") ? 1 : !strcmp(v, "integer") ? 2 : 0;
             continue; }
+        if (!strcmp(k, "joy_steer_guid") || !strcmp(k, "joy_gas_guid") || !strcmp(k, "joy_brake_guid")) {
+            rr_joyaxis_t *ax = k[4] == 's' ? &g_joy_steer : k[4] == 'g' ? &g_joy_gas : &g_joy_brake;
+            snprintf(ax->guid, sizeof ax->guid, "%s", v);
+            continue;
+        }
+        if (!strncmp(k, "joy_button_", 11)) {
+            for (int a = 0; a < RR_ACT_N; a++) {
+                char key[64]; snprintf(key, sizeof key, "joy_button_%s", act_name[a]);
+                if (!strcmp(k, key)) g_joy_button[a] = atoi(v);
+                snprintf(key, sizeof key, "joy_button_%s_guid", act_name[a]);
+                if (!strcmp(k, key)) snprintf(g_joy_button_guid[a], sizeof g_joy_button_guid[a], "%s", v);
+            }
+            continue;
+        }
         if (!strcmp(k, "joy_steer") || !strcmp(k, "joy_gas") || !strcmp(k, "joy_brake")) {
             rr_joyaxis_t *ax = k[4] == 's' ? &g_joy_steer : k[4] == 'g' ? &g_joy_gas : &g_joy_brake;
             ax->axis = atoi(v); ax->invert = strstr(v, "invert") != NULL; ax->half = strstr(v, "half") != NULL;
+            ax->direction = strstr(v, "positive") ? 1 : strstr(v, "negative") ? -1 : 0;
             continue;
         }
         if (!strncmp(k, "joy_", 4)) {
@@ -287,4 +304,118 @@ void rr_input_bind_key(int a, SDL_Scancode sc)
     g_bind[a].keys[0] = sc; g_bind[a].nkeys = 1;
     rr_input_set_option("rr_controls.cfg", act_name[a], SDL_GetScancodeName(sc));
     fprintf(stderr, "[INPUT] %s = %s (saved to rr_controls.cfg)\n", act_name[a], SDL_GetScancodeName(sc));
+}
+
+/* The existing action rows accept keys, raw buttons and analog controls. */
+static rr_joyaxis_t *action_axis(int a)
+{
+    if (a == RR_STEER_LEFT || a == RR_STEER_RIGHT) return &g_joy_steer;
+    if (a == RR_GAS) return &g_joy_gas;
+    if (a == RR_BRAKE) return &g_joy_brake;
+    return NULL;
+}
+bool rr_input_device_matches(SDL_Joystick *js, const char *guid)
+{
+    if (!js || !SDL_JoystickGetAttached(js)) return false;
+    if (!*guid) return true; /* Legacy configuration applies to any device. */
+    char current[40];
+    SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), current, sizeof current);
+    return !strcmp(current, guid);
+}
+bool rr_input_button_matches(int a, SDL_Joystick *js, int button)
+{
+    return a >= 0 && a < RR_ACT_N && button >= 0 && g_joy_button[a] == button &&
+           rr_input_device_matches(js, g_joy_button_guid[a]) &&
+           button < SDL_JoystickNumButtons(js);
+}
+static struct { SDL_JoystickID id; int base[16], n; } capture_base[16];
+static int capture_count;
+void rr_input_capture_begin(int action)
+{
+    capture_count = 0;
+    if (!action_axis(action)) return;
+    for (int i = 0; i < SDL_NumJoysticks() && capture_count < 16; i++) {
+        if (SDL_IsGameController(i)) continue;
+        SDL_Joystick *js = SDL_JoystickFromInstanceID(SDL_JoystickGetDeviceInstanceID(i));
+        if (!js) continue;
+        int d = capture_count++;
+        capture_base[d].id = SDL_JoystickInstanceID(js);
+        int n = SDL_JoystickNumAxes(js);
+        capture_base[d].n = n < 16 ? n : 16;
+        for (int j = 0; j < capture_base[d].n; j++) capture_base[d].base[j] = SDL_JoystickGetAxis(js, j);
+    }
+}
+bool rr_input_capture_event(int a, const SDL_Event *e)
+{
+    if (a < 0 || a >= RR_ACT_N) return true;
+    if (e->type == SDL_KEYDOWN && !e->key.repeat) {
+        if (e->key.keysym.scancode != SDL_SCANCODE_ESCAPE) rr_input_bind_key(a, e->key.keysym.scancode);
+        return true;
+    }
+    if (e->type == SDL_JOYBUTTONDOWN) {
+        SDL_Joystick *js = SDL_JoystickFromInstanceID(e->jbutton.which);
+        if (!js) return false;
+        char key[64], value[32];
+        g_joy_button[a] = e->jbutton.button;
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), g_joy_button_guid[a], sizeof g_joy_button_guid[a]);
+        snprintf(key, sizeof key, "joy_button_%s", act_name[a]);
+        snprintf(value, sizeof value, "%d", g_joy_button[a]);
+        rr_input_set_option("rr_controls.cfg", key, value);
+        snprintf(key, sizeof key, "joy_button_%s_guid", act_name[a]);
+        rr_input_set_option("rr_controls.cfg", key, g_joy_button_guid[a]);
+        return true;
+    }
+    rr_joyaxis_t *ax = action_axis(a);
+    if (!ax || e->type != SDL_JOYAXISMOTION) return false;
+    SDL_Joystick *js = SDL_JoystickFromInstanceID(e->jaxis.which);
+    if (!js) return false;
+    for (int d = 0; d < capture_count; d++) {
+        int index = e->jaxis.axis;
+        if (capture_base[d].id != e->jaxis.which || index >= capture_base[d].n) continue;
+        int rest = capture_base[d].base[index], delta = (int)e->jaxis.value - rest;
+        if (abs(delta) < 6000) return false;
+        bool steer = ax == &g_joy_steer;
+        ax->axis = index; ax->half = false;
+        ax->invert = steer && ((a == RR_STEER_LEFT && delta > 0) || (a == RR_STEER_RIGHT && delta < 0));
+        ax->direction = steer ? 0 : delta > 0 ? 1 : -1;
+        ax->rest = rest; ax->rest_valid = true;
+        SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), ax->guid, sizeof ax->guid);
+        const char *key = steer ? "joy_steer" : a == RR_GAS ? "joy_gas" : "joy_brake";
+        char value[64], guidkey[64];
+        snprintf(value, sizeof value, "%d%s%s", index, ax->invert ? " invert" : "",
+                 ax->direction > 0 ? " positive" : ax->direction < 0 ? " negative" : "");
+        rr_input_set_option("rr_controls.cfg", key, value);
+        snprintf(guidkey, sizeof guidkey, "%s_guid", key);
+        rr_input_set_option("rr_controls.cfg", guidkey, ax->guid);
+        return true;
+    }
+    return false;
+}
+double rr_input_pedal_value(rr_joyaxis_t *ax, int r)
+{
+    double f;
+    if (ax->direction) {
+        if (!ax->rest_valid) { ax->rest = r; ax->rest_valid = true; }
+        int range = ax->direction > 0 ? 32767 - ax->rest : ax->rest + 32768;
+        int delta = ax->direction > 0 ? r - ax->rest : ax->rest - r;
+        f = range > 0 ? (double)delta / range : 0;
+    } else {
+        f = ax->half ? (r < 0 ? 0.0 : r / 32767.0) : (r + 32768) / 65535.0;
+        if (ax->invert) f = 1.0 - f;
+    }
+    return f < 0 ? 0 : f > 1 ? 1 : f;
+}
+void rr_input_binding_label(int a, char *text, size_t size)
+{
+    const char *key = SDL_GetScancodeName(g_bind[a].nkeys ? g_bind[a].keys[0] : SDL_SCANCODE_UNKNOWN);
+    snprintf(text, size, "%s", *key ? key : "(none)");
+    if (g_joy_button[a] >= 0) {
+        size_t n = strlen(text);
+        snprintf(text + n, size - n, " / button %d", g_joy_button[a]);
+    }
+    rr_joyaxis_t *ax = action_axis(a);
+    if (ax && ax->axis >= 0) {
+        size_t n = strlen(text);
+        snprintf(text + n, size - n, " / axis %d%s", ax->axis, ax->invert ? " (inv)" : "");
+    }
 }

@@ -115,8 +115,8 @@ static void row_text(int t, int r, char *label, size_t ln, char *value, size_t v
             snprintf(label, ln, "%s", rr_input_action_name(a));
             for (char *c = label; *c; c++) if (*c == '_') *c = ' ';
             if (label[0] >= 'a' && label[0] <= 'z') label[0] = (char)(label[0] - 'a' + 'A');
-            const char *k = rebinding == a ? "press a key..." : SDL_GetScancodeName(g_bind[a].nkeys ? g_bind[a].keys[0] : SDL_SCANCODE_UNKNOWN);
-            snprintf(value, vn, "%s", (k && *k) ? k : "(none)");
+            if (rebinding == a) snprintf(value, vn, "key, button or move control...");
+            else rr_input_binding_label(a, value, vn);
         }
         break;
     case T_RECORD: snprintf(label, ln, "Record input"); snprintf(value, vn, "%s", rr_input_recording() ? "ON  (recording...)" : "OFF"); break;
@@ -161,7 +161,7 @@ static void row_change(int t, int r, int dir)
         break; }
     case T_CONTROLS:
         if (r == 0) rr_host_set_freeplay(!rr_hw_freeplay());
-        else if (dir == 0) rebinding = r - 1;
+        else if (dir == 0) { rebinding = r - 1; rr_input_capture_begin(rebinding); }
         break;
     case T_RECORD: rr_host_toggle_record(); break;
     }
@@ -217,11 +217,8 @@ static void nav(int k)
 bool rr_ui_event(SDL_Event *e)
 {
     if (!ctx || !open_) return false;
-    if (rebinding >= 0) {                                /* the next key is the new binding */
-        if (e->type == SDL_KEYDOWN && !e->key.repeat) {
-            if (e->key.keysym.scancode != SDL_SCANCODE_ESCAPE) rr_input_bind_key(rebinding, e->key.keysym.scancode);
-            rebinding = -1;
-        } else if (e->type == SDL_CONTROLLERBUTTONDOWN && e->cbutton.button == SDL_CONTROLLER_BUTTON_B) rebinding = -1;
+    if (rebinding >= 0) {
+        if (rr_input_capture_event(rebinding, e)) rebinding = -1;
         return true;
     }
     int k = -1;
@@ -377,7 +374,7 @@ void rr_ui_draw(bool *quit)
             if (nk_button_label(ctx, "50%"))  rr_host_set_volume(50);
             if (nk_button_label(ctx, "100%")) rr_host_set_volume(100);
         } else if (tab == T_CONTROLS) {
-            labelf(NK_TEXT_LEFT, "Enter, then press the new key (Esc cancels)");
+            labelf(NK_TEXT_LEFT, "Select, then press key/button or move control (Esc cancels)");
         } else if (tab == T_RECORD) {
             labelf(NK_TEXT_LEFT, "Records the cabinet inputs per frame to recordings/;");
             labelf(NK_TEXT_LEFT, "replay with rr --replay FILE. F9 toggles without the menu.");

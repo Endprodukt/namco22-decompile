@@ -34,6 +34,7 @@ static int npages;
 static int tab, row;                          /* row -1 = the title strip */
 static bool kb_moved;                         /* keep the selected row in view after a key */
 static void (*cap_cb)(SDL_Scancode, void *);
+static bool (*input_cap_cb)(const SDL_Event *, void *);
 static void *cap_u;
 
 static int cyc(int v, int d, int n) { return ((v + d) % n + n) % n; }
@@ -201,11 +202,16 @@ void eng_ui_shutdown(void) { if (ctx) nk_sdl_shutdown(); ctx = NULL; }
 bool eng_ui_is_open(void) { return open_; }
 bool eng_ui_quit_requested(void) { return quit_req; }
 bool eng_ui_restart_requested(void) { return restart_req; }
-void eng_ui_set_open(bool on) { open_ = on; cap_cb = NULL; if (on && row >= nrows(tab)) row = 0; }
+void eng_ui_set_open(bool on) {
+    open_ = on; cap_cb = NULL;
+    if (input_cap_cb) { input_cap_cb(NULL, cap_u); input_cap_cb = NULL; }
+    if (on && row >= nrows(tab)) row = 0;
+}
 void eng_ui_input_begin(void) { if (ctx) nk_input_begin(ctx); }
 void eng_ui_input_end(void)   { if (ctx) nk_input_end(ctx); }
-void eng_ui_capture_key(void (*cb)(SDL_Scancode, void *), void *u) { cap_cb = cb; cap_u = u; }
-bool eng_ui_capturing(void) { return cap_cb != NULL; }
+void eng_ui_capture_key(void (*cb)(SDL_Scancode, void *), void *u) { input_cap_cb = NULL; cap_cb = cb; cap_u = u; }
+void eng_ui_capture_input(bool (*cb)(const SDL_Event *, void *), void *u) { cap_cb = NULL; input_cap_cb = cb; cap_u = u; }
+bool eng_ui_capturing(void) { return cap_cb != NULL || input_cap_cb != NULL; }
 void eng_ui_goto(int p, int r) { if (p >= 0 && p < npages) { tab = p; row = r; } }
 
 /* one navigation step from the keyboard, a pad or a hat */
@@ -237,6 +243,10 @@ void eng_ui_nav(char c)
 bool eng_ui_event(SDL_Event *e)
 {
     if (!ctx || !open_) return false;
+    if (input_cap_cb) {
+        if (input_cap_cb(e, cap_u)) input_cap_cb = NULL;
+        return true;
+    }
     if (cap_cb) {                                        /* the next key is the new binding */
         if (e->type == SDL_KEYDOWN && !e->key.repeat) {
             void (*cb)(SDL_Scancode, void *) = cap_cb; cap_cb = NULL;
