@@ -164,6 +164,45 @@ void rr_hw_set_freeplay(bool on)
 }
 bool rr_hw_freeplay(void) { return g_rr.wram[0x1043] != 0; }
 
+/* THE EEPROM FILE (engine/ss22_board.c's scheme): the test menu's settings, the coin options and the records live in the
+ * EEPROM, which used to come from rv1eeprm.9e at every start and was never written back -- a change in the test menu was
+ * gone on the next start. A windowed session keeps it in a file: loaded at start when it holds exactly one image,
+ * rewritten (temp file + rename) whenever the game has changed it. Headless runs never touch it. */
+static char    nv_path[512];
+static uint8_t nv_saved[RR_EEPROM_SIZE];
+static bool    nv_on;
+
+void rr_hw_eeprom_persist(const char *path)
+{
+    snprintf(nv_path, sizeof nv_path, "%s", path);
+    FILE *f = fopen(nv_path, "rb");
+    if (f) {
+        uint8_t buf[RR_EEPROM_SIZE + 1];
+        size_t n = fread(buf, 1, sizeof buf, f);
+        fclose(f);
+        if (n == RR_EEPROM_SIZE) { memcpy(g_rr.eeprom, buf, RR_EEPROM_SIZE); fprintf(stderr, "[HW] EEPROM loaded from %s\n", nv_path); }
+        else fprintf(stderr, "[HW] %s is not an EEPROM image (%zu bytes) -- ignored\n", nv_path, n);
+    }
+    memcpy(nv_saved, g_rr.eeprom, RR_EEPROM_SIZE);
+    nv_on = true;
+}
+
+void rr_hw_eeprom_save(void)
+{
+    if (!nv_on || !memcmp(nv_saved, g_rr.eeprom, RR_EEPROM_SIZE)) return;
+    char tmp[sizeof nv_path + 8];
+    snprintf(tmp, sizeof tmp, "%s.tmp", nv_path);
+    FILE *f = fopen(tmp, "wb");
+    if (!f) return;
+    bool ok = fwrite(g_rr.eeprom, 1, RR_EEPROM_SIZE, f) == RR_EEPROM_SIZE;
+    ok = (fclose(f) == 0) && ok;
+    if (!ok) { remove(tmp); return; }
+#ifdef _WIN32
+    remove(nv_path);
+#endif
+    if (rename(tmp, nv_path) == 0) memcpy(nv_saved, g_rr.eeprom, RR_EEPROM_SIZE);
+}
+
 /* STEERING MOTOR is group 3 (EEPROM 0x2C0, WRAM 0x10001060) byte 0x11: 0 = ON, 1 = OFF. OFF, the game
  * neither encodes its steering torque nor sends it (0x029D9C, 0x00470E: `tst.b $10001071`) and keeps the
  * motor enable (bit 3 of shared 0x20) clear. */

@@ -188,8 +188,9 @@ void rr_tick(void)
     if (test_gas >= 0 && frame >= (uint32_t)test_gas) g_hw.gas = 0x610;
     for (int i = 0; i < n_steer; i++) if (frame >= (uint32_t)test_steer[i].at) g_hw.steer = (uint16_t)test_steer[i].value;
     if (windowed) {
+        if (frame % 120 == 0) rr_hw_eeprom_save();     /* the test menu's settings and the records, once the game has changed them */
         do {
-            if (!rr_host_frame()) { perf_report(); rr_audio_close(); rr_host_close(); fprintf(stderr, "[RR] window closed at frame %u\n", frame); exit(0); }
+            if (!rr_host_frame()) { perf_report(); rr_hw_eeprom_save(); rr_audio_close(); rr_host_close(); fprintf(stderr, "[RR] window closed at frame %u\n", frame); exit(0); }
         } while (rr_host_paused());
     }
     rr_input_frame(frame);                         /* replay overrides, recorder logs */
@@ -329,6 +330,7 @@ int main(int argc, char **argv)
     rr_audio_init(rom_dir);
     rr_sound_init(rom_dir);
     rr_hw_init(rom_dir);
+    if (windowed) rr_hw_eeprom_persist("rr_eeprom.nv");   /* a player's session keeps its settings and records; headless runs never do */
     if (freeplay >= 0) rr_hw_set_freeplay(freeplay);
     else if (windowed && g_cfg_freeplay >= 0) {        /* the saved menu choice, windowed runs only */
         rr_hw_set_freeplay(g_cfg_freeplay);
