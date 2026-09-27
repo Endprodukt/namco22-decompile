@@ -1,26 +1,17 @@
 /* win_compat.h -- the few POSIX pieces Rave Racer uses, mapped onto Windows.
  * Force-included into every source file by CMakeLists.txt when building for
- * Windows (MinGW-w64); the Linux build never sees it. (Prop Cycle has its own,
- * ../include/win_compat.h.) */
+ * Windows (MinGW-w64); the Linux build never sees it. Shared POSIX mappings
+ * live in ../../include/win_compat.h. */
 #ifndef RR_WIN_COMPAT_H
 #define RR_WIN_COMPAT_H
 #ifdef _WIN32
-#include <stdlib.h>
-#include <time.h>
-#include <direct.h>
-#include <io.h>
-#include <sys/stat.h>
+#include "../../include/win_compat.h"
 
-/* mkdir(path, mode): Windows has no permission bits */
-#define mkdir(path, mode) _mkdir(path)
-
-/* localtime_r / setenv */
-static inline struct tm *rr_win_localtime_r(const time_t *t, struct tm *out)
-{ return localtime_s(out, t) == 0 ? out : 0; }
-#define localtime_r rr_win_localtime_r
-static inline int rr_win_setenv(const char *n, const char *v, int overwrite)
-{ if (!overwrite && getenv(n)) return 0; return _putenv_s(n, v); }
-#define setenv rr_win_setenv
+/* The Win32 headers define this obsolete memory-model keyword; the lifted
+ * game code uses 'near' as a normal variable name. */
+#ifdef near
+#undef near
+#endif
 
 /* sysconf(_SC_NPROCESSORS_ONLN): the renderer's thread count -- SDL knows it */
 #ifndef _SC_NPROCESSORS_ONLN

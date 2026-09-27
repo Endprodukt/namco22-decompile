@@ -1,19 +1,47 @@
 /* win_compat.h -- the few POSIX pieces the engine uses, mapped onto Windows.
  *
  * Force-included into every source file by CMakeLists.txt when building for
- * Windows (MinGW-w64), so the Linux build never sees it. Keep it to thin
- * mappings; anything with real behaviour belongs behind #ifdef _WIN32 at the
- * one call site that needs it.
+ * Windows (MinGW-w64), so the Linux build never sees it. Keep shared POSIX
+ * compatibility mappings here so engine call sites stay portable.
  */
 #ifndef WIN_COMPAT_H
 #define WIN_COMPAT_H
 #ifdef _WIN32
 
+#include <errno.h>
+#include <windows.h>
 #include <stdlib.h>
 #include <time.h>
 #include <direct.h>
 #include <io.h>
 #include <sys/stat.h>
+
+/* The engine only uses CLOCK_MONOTONIC. Use QPC rather than requiring
+ * MinGW's optional clock_gettime implementation / winpthreads at link time.
+ * Query the frequency locally: no shared lazy-initialisation data race. */
+#ifndef CLOCK_MONOTONIC
+#define CLOCK_MONOTONIC 1
+#endif
+static inline int win_clock_gettime(int clock_id, struct timespec *ts)
+{
+    LARGE_INTEGER frequency, counter;
+    if (clock_id != CLOCK_MONOTONIC) {
+        errno = EINVAL;
+        return -1;
+    }
+    if (!QueryPerformanceFrequency(&frequency) ||
+        !QueryPerformanceCounter(&counter)) {
+        ts->tv_sec = 0;
+        ts->tv_nsec = 0;
+        errno = EIO;
+        return -1;
+    }
+    ts->tv_sec = (time_t)(counter.QuadPart / frequency.QuadPart);
+    ts->tv_nsec = (long)((counter.QuadPart % frequency.QuadPart) *
+                         1000000000LL / frequency.QuadPart);
+    return 0;
+}
+#define clock_gettime win_clock_gettime
 
 /* mkdir(path, mode): Windows has no permission bits. */
 #define mkdir(path, mode) _mkdir(path)
