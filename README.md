@@ -18,6 +18,29 @@ where a MAME set has since renamed one (see [docs/ROM_CHECKSUMS.md](docs/ROM_CHE
 
 **No extra BIOS file.** Earlier instructions asked for `c71.bin` or MAME's `namcoc71.zip` (the DSP's BIOS). The games have it built in now, so you never need it; if you have it, ignore it.
 
+## Pictures
+
+Tokyo Wars:
+
+![Tokyo Wars: widescreen, with the menu open](docs/images/tokyowar-widescreen.png)
+
+Rave Racer:
+
+![Rave Racer: a race in widescreen](docs/images/raverace-widescreen.png)
+
+Dirt Dash:
+
+![Dirt Dash: a race in widescreen](docs/images/dirtdash-gameplay.png)
+
+Prop Cycle:
+
+![Prop Cycle: gameplay, over the river](docs/images/propcycle-gameplay.png)
+![The title screen](docs/images/attract-title.png)
+
+Tokyo Wars, the title screen:
+
+![Tokyo Wars: the title screen](docs/images/tokyowar-title.png)
+
 ## Download (nothing to build)
 
 Each release on the [Releases page](https://github.com/spacestate1/namco22-decompile/releases) has three ready-made packages.
@@ -197,29 +220,6 @@ Dirt Dash. Test mode is a switch: turn it on to enter the operator menu (its
 screen says which controls choose, enter and change a value), turn it off from
 the menu to leave. A hint on the screen says how to open the menu for the first
 few seconds after the game starts, when a pad is connected.
-
-## Pictures
-
-Tokyo Wars:
-
-![Tokyo Wars: widescreen, with the menu open](docs/images/tokyowar-widescreen.png)
-
-Rave Racer:
-
-![Rave Racer: a race in widescreen](docs/images/raverace-widescreen.png)
-
-Dirt Dash:
-
-![Dirt Dash: a race in widescreen](docs/images/dirtdash-gameplay.png)
-
-Prop Cycle:
-
-![Prop Cycle: gameplay, over the river](docs/images/propcycle-gameplay.png)
-![The title screen](docs/images/attract-title.png)
-
-Tokyo Wars, the title screen:
-
-![Tokyo Wars: the title screen](docs/images/tokyowar-title.png)
 
 ## Screen settings (Prop Cycle, Tokyo Wars and Dirt Dash)
 
