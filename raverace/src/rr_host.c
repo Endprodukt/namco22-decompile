@@ -313,6 +313,7 @@ bool rr_host_open(int scale)
     if (g_cfg_winmode < 0) g_cfg_winmode = g_cfg_fullscreen ? 1 : 0;
     g_cfg_fullscreen = g_cfg_winmode != 0;
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    eng_ffb_start();                                 /* before the joysticks, or Windows never lists a wheel as haptic (engine/eng_ffb.h) */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "[HOST] SDL: %s\n", SDL_GetError()); return false; }
     rr_gl_context_attributes();
     win = SDL_CreateWindow("Rave Racer", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, rr_host_win_w(g_cfg_scale), rr_host_win_h(g_cfg_scale),
@@ -438,7 +439,7 @@ static bool pad_steer(int *out)                   /* -32767..32767 */
             v = SDL_GameControllerGetAxis(dev[d].gc, SDL_CONTROLLER_AXIS_LEFTX);
             if (v > -g_pad_deadzone && v < g_pad_deadzone) v = 0;
             else v = (v > 0 ? v - g_pad_deadzone : v + g_pad_deadzone) * 32767 / (32767 - g_pad_deadzone);
-        } else if (rr_input_device_matches(dev[d].js, g_joy_steer.guid) && g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) {
+        } else if (rr_input_axis_device(&g_joy_steer, dev[d].js) && g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) {
             /* a wheel: only a sliver of deadzone, and rescaled to START at its edge. A cut-off +-1000 without the rescale left 3% of
              * the lock dead and then jumped the steering 0x2B at once: a step exactly at the centre, which the steering motor's
              * centring then held the wheel against */
@@ -471,11 +472,19 @@ static int motor_hold_off(int m)
 }
 static void wheel_motor(bool hold)
 {
-    SDL_Joystick *js = NULL;
-    for (int d = 0; d < MAX_DEV && !js && g_cfg_ffb_strength > 0; d++)
-        if (dev[d].js && rr_input_device_matches(dev[d].js, g_joy_steer.guid) &&
-            g_joy_steer.axis >= 0 && g_joy_steer.axis < SDL_JoystickNumAxes(dev[d].js)) js = dev[d].js;
-    ffb_wheel = eng_ffb_device(js);
+    /* the candidates: the devices sharing the steering binding's GUID -- the bound one first, then those SDL calls haptic, then
+     * the rest. A Fanatec DD base is two "FANATEC Wheel"s under one GUID and the motor need not sit on the steering axis' one;
+     * eng_ffb_device_from() opens the first that takes a force */
+    SDL_Joystick *cand[MAX_DEV];
+    int n = 0;
+    for (int pass = 0; pass < 3 && g_cfg_ffb_strength > 0 && g_joy_steer.axis >= 0; pass++)
+        for (int d = 0; d < MAX_DEV; d++) {
+            SDL_Joystick *js = dev[d].js;
+            if (!js || !rr_input_device_matches(js, g_joy_steer.guid)) continue;
+            const bool bound = rr_input_axis_device(&g_joy_steer, js), capable = eng_ffb_capable(js);
+            if (pass == 0 ? bound : pass == 1 ? !bound && capable : !bound && !capable) cand[n++] = js;
+        }
+    ffb_wheel = eng_ffb_device_from(cand, n);
     if (ffb_wheel)
         eng_ffb_force(hold ? 0 : motor_hold_off(eng_ffb_decode(rr_hw_motor_byte())), g_cfg_ffb_strength, g_joy_steer.invert != (g_cfg_ffb_invert != 0));
 }
@@ -488,7 +497,7 @@ static bool pad_pedal(bool gas, int *out)         /* 0..0x610 */
         if (dev[d].gc) {
             int t = SDL_GameControllerGetAxis(dev[d].gc, gas ? SDL_CONTROLLER_AXIS_TRIGGERRIGHT : SDL_CONTROLLER_AXIS_TRIGGERLEFT);
             if (t > 1000) v = (t - 1000) * 0x610 / (32767 - 1000);
-        } else if (rr_input_device_matches(dev[d].js, ax->guid) && ax->axis >= 0 && ax->axis < SDL_JoystickNumAxes(dev[d].js)) {
+        } else if (rr_input_axis_device(ax, dev[d].js) && ax->axis >= 0 && ax->axis < SDL_JoystickNumAxes(dev[d].js)) {
             int r = SDL_JoystickGetAxis(dev[d].js, ax->axis);
             double f = rr_input_pedal_value(ax, r);
             if (f > 0.03) v = (int)((f - 0.03) / 0.97 * 0x610);

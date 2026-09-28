@@ -247,8 +247,19 @@ static int raw_slot_for(const raw_axis_bind *b)
 /* the steering device's haptic side (engine/eng_ffb.c opens it once per device) */
 static bool ffb_device(void)
 {
-    const int d = raw_slot_for(&joy_steer);
-    return eng_ffb_device(d >= 0 && joy_steer.axis >= 0 ? raws[d].js : NULL);
+    /* the candidates: the devices sharing the steering binding's GUID -- the one the axis is read from first, then those SDL
+     * calls haptic, then the rest. A Fanatec DD base is two "FANATEC Wheel"s under one GUID and the motor need not sit on the
+     * steering axis' one; eng_ffb_device_from() opens the first that takes a force */
+    SDL_Joystick *cand[MAX_DEV];
+    int n = 0;
+    const int first = joy_steer.axis >= 0 ? raw_slot_for(&joy_steer) : -1;
+    for (int pass = 0; pass < 3 && first >= 0; pass++)
+        for (int i = 0; i < MAX_DEV; i++) {
+            if (!raws[i].js || (joy_steer.guid[0] && strcmp(raws[i].guid, joy_steer.guid))) continue;
+            const bool capable = eng_ffb_capable(raws[i].js);
+            if (pass == 0 ? i == first : pass == 1 ? i != first && capable : i != first && !capable) cand[n++] = raws[i].js;
+        }
+    return eng_ffb_device_from(cand, n);
 }
 
 static void ffb_apply(void)

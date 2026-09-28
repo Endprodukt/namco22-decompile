@@ -24,6 +24,7 @@
 #include "eng_pace.h"
 #include "tex_bake.h"
 #include "ss22_host.h"
+#include "eng_ffb.h"
 #include "gl_warn.h"
 
 #define FRAME_NS 16693000ull                      /* 1 / 59.906 Hz, 25.6 MHz / 814 / 525 */
@@ -57,6 +58,7 @@ bool ss22_host_open(const ss22_host_game *g, int scale, bool fs)      /* scale <
 {
     game = g;
     SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
+    eng_ffb_start();                                 /* before the joysticks, or Windows never lists a wheel as haptic (engine/eng_ffb.h) */
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "[HOST] SDL: %s\n", SDL_GetError()); return false; }
     eng_gl_context_attributes();
     eng_disp_load(game->cfg_file, scale, fs);                /* the saved display choices; --window N / --fullscreen override */
