@@ -185,28 +185,29 @@ void ui_map_input(const Uint8 *keys, float dt) {
     if (keys[SDL_SCANCODE_LSHIFT] || keys[SDL_SCANCODE_RSHIFT]) sp *= 4.0f;
     if (keys[SDL_SCANCODE_LCTRL]  || keys[SDL_SCANCODE_RCTRL])  sp *= 0.2f;
 
-    /* Camera-relative movement: W goes where the camera LOOKS, whatever the
-     * orientation, including pitch. The view matrix built in
-     * ui_map_camera() is orthonormal with the m[src][dst] convention, so a
-     * world direction mapping to a view axis is just the matching COLUMN:
-     *   forward (view +Z) = ( sy*cp, -sp,  cy*cp )
-     *   right   (view +X) = ( cy,     0,  -sy    )
-     *   up      (view +Y) = ( sy*sp,  cp,  cy*sp )
-     * The previous version used yaw only, so W drifted sideways as soon as
-     * the view was pitched. */
-    float cy = cosf(map_yaw),   sy = sinf(map_yaw);
-    float cp = cosf(map_pitch), sp_ = sinf(map_pitch);
-    float fwd[3]   = {  sy * cp, -sp_,  cy * cp };
-    float right[3] = {  cy,       0.0f, -sy     };
-    float up[3]    = {  sy * sp_, cp,    cy * sp_ };
+    /* Ground-plane movement, the way a modeling program's fly/pan navigation
+     * (Blender, Maya, ...) keeps WASD: tied to YAW only, never to pitch, so
+     * turning the view to look at something doesn't change which way "W"
+     * goes. Q/E are a fixed world up/down for the same reason. This map view
+     * starts pitched steeply toward straight down (map_pitch = 1.05) to give
+     * an overview, and a full view-relative "forward" (the previous version)
+     * is mostly STRAIGHT DOWN at that pitch -- pressing W drove the camera
+     * into the ground instead of across the map. Mouse-drag panning
+     * (ui_map_mouse) is deliberately NOT changed to match: dragging is
+     * screen-space -- it needs the tilted view axes so the point under the
+     * cursor actually follows the cursor -- which is a different job from a
+     * fly key that should mean the same thing at any tilt. */
+    float sy = sinf(map_yaw), cy = cosf(map_yaw);
+    float fwd[3]   = { sy,   0.0f, cy  };
+    float right[3] = { cy,   0.0f, -sy };
 
     float mv[3] = { 0, 0, 0 };
     if (keys[SDL_SCANCODE_W]) for (int i=0;i<3;i++) mv[i] += fwd[i];
     if (keys[SDL_SCANCODE_S]) for (int i=0;i<3;i++) mv[i] -= fwd[i];
     if (keys[SDL_SCANCODE_D]) for (int i=0;i<3;i++) mv[i] += right[i];
     if (keys[SDL_SCANCODE_A]) for (int i=0;i<3;i++) mv[i] -= right[i];
-    if (keys[SDL_SCANCODE_Q]) for (int i=0;i<3;i++) mv[i] += up[i];
-    if (keys[SDL_SCANCODE_E]) for (int i=0;i<3;i++) mv[i] -= up[i];
+    if (keys[SDL_SCANCODE_Q]) mv[1] += 1.0f;
+    if (keys[SDL_SCANCODE_E]) mv[1] -= 1.0f;
 
     map_cx += mv[0] * sp;
     map_cy += mv[1] * sp;

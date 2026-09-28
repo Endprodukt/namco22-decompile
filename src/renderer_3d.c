@@ -1140,6 +1140,18 @@ static void geohw_draw_map(void)
     float cz = fc[2] + 8.0f  * MAP_GRID_CELL;
     int32_t dist = (int32_t)(MAP_BASE_DIST * zoom);
 
+    /* Q15 -> 2.14: a point-ROM unit is half a world unit (register row 3 --
+     * "everything 2x too big"), so every placement's rotation matrix is
+     * halved before geo_hw sees it, terrain (an identity/view-only matrix
+     * here, no object rotation) included. Without this every chunk drew at
+     * TWICE its true size, which is what looked like heavy overlap between
+     * neighbours placed at their correct, native, edge-to-edge positions --
+     * not something native 1.0x GRID_CELL spacing caused. */
+    int32_t mh[3][3];
+    for (int r = 0; r < 3; r++)
+        for (int c = 0; c < 3; c++)
+            mh[r][c] = m[r][c] >> 1;
+
     int base = map_terrain_base[ui_map_course() & 3];
     for (int gz = 0; gz < 16; gz++) {
         for (int gx = 0; gx < 8; gx++) {
@@ -1148,11 +1160,18 @@ static void geohw_draw_map(void)
                              (int32_t)(gz * MAP_GRID_CELL - cz) };
             geo_view gv;
             memset(&gv, 0, sizeof gv);
-            memcpy(gv.m, m, sizeof m);
+            memcpy(gv.m, mh, sizeof mh);
+            /* The translation goes through the SAME halved matrix as the
+             * vertices (register row 179): a corner two chunks share is
+             * transformed once from each chunk's own centre, and pushing it
+             * through the full-precision view instead of the halved one
+             * leaves the two copies disagreeing by the halving's dropped
+             * bit -- up to 3 units at a terrain chunk's own scale, enough to
+             * show a gap at the shared edge. */
             for (int c = 0; c < 3; c++)
-                gv.t[c] = (int32_t)(((int64_t)p[0] * m[0][c] +
-                                     (int64_t)p[1] * m[1][c] +
-                                     (int64_t)p[2] * m[2][c]) >> 15);
+                gv.t[c] = (int32_t)(((int64_t)p[0] * mh[0][c] +
+                                     (int64_t)p[1] * mh[1][c] +
+                                     (int64_t)p[2] * mh[2][c]) >> 14);
             gv.t[2] += dist;              /* push the scene in front of the eye */
             /* Centre it vertically. Pitching down rotates the ground plane
              * up the screen; screen_y = cy - (Y*mant)/Z, so lowering Y by
