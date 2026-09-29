@@ -34,6 +34,16 @@
 const ss22_game *g_ss22_game;
 static char **g_argv;
 
+/* ENG_FTIME=1: per-frame wall-clock split, printed every 60 frames --
+ * total = cpu (68K+DSP+sound, everything outside the video calls) + prepare
+ * (ss22_video_prepare: geometry, clip, bakes, batching) + host (ss22_host_frame:
+ * the GL draws and the swap). The quad_gl sub-timers ride along. */
+#include <time.h>
+static double ft_now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec * 1e-9; }
+static int ftime = -1;
+static double ft_prev, ft_tot, ft_prep, ft_host, ft_max, ft_bake, ft_clip, ft_gl;
+static long ft_n;
+
 static int32_t  polls_per_frame;           /* 68K instructions per frame: the game's (MAME's average over its first 300 frames) */
 static uint32_t max_frames = 600;
 static const char *dump_dir;
@@ -252,6 +262,12 @@ void rr_tick(void)
     ss22_snd_slice();                                     /* and so does the sound MCU (ports, A-D, the C352) */
     if ((serial_acc += 100) >= 60 * SLICES) { serial_acc -= 60 * SLICES; ss22_dsp_serial(); }
     if (++slice % SLICES) return;
+    if (ftime < 0) { ftime = getenv("ENG_FTIME") != NULL; if (ftime) { extern int g_perf_enabled; g_perf_enabled = 1; } }
+    if (ftime) {
+        double t0 = ft_now();
+        if (ft_prev > 0) { double tot = t0 - ft_prev; ft_tot += tot; if (tot > ft_max) ft_max = tot; ft_n++; }
+        ft_prev = t0;
+    }
     rr_frame++;
 #ifdef RR_TRACE
     if (pc_ring_frame >= 0 && (rr_frame == (uint32_t)pc_ring_frame || (pc_ring_frame > 0 && rr_frame > (uint32_t)pc_ring_frame && rr_frame % 300 == 0))) pc_ring_report();
@@ -261,7 +277,9 @@ void rr_tick(void)
     if (dump_every && rr_frame % dump_every == 0) dump_state();
     sweep_tick();
     if (video_on) {
+        double t1 = ftime ? ft_now() : 0;
         ss22_video_prepare();                              /* the master's finished list, before this vblank starts the next */
+        double t2 = ftime ? ft_now() : 0;
         if (shot_dir && rr_frame % shot_every == 0) {
             char p[1024]; snprintf(p, sizeof p, "%s/%s_f%u.ppm", shot_dir, g_ss22_game->lname, rr_frame);
             ss22_host_shot(p);
@@ -276,6 +294,16 @@ void rr_tick(void)
 #endif
             exit(0);
         }
+        if (ftime) { ft_prep += t2 - t1; ft_host += ft_now() - t2; }
+    }
+    if (ftime && rr_frame % 60 == 0 && ft_n) {
+        extern double g_perf_bake, g_perf_clip, g_perf_gl;
+        fprintf(stderr, "[FTIME] frame %u  avg %.2f ms = cpu %.2f + prep %.2f + host %.2f   max %.2f | bake %.2f clip %.2f gl %.2f\n",
+                rr_frame, ft_tot / ft_n * 1e3, (ft_tot - ft_prep - ft_host) / ft_n * 1e3,
+                ft_prep / ft_n * 1e3, ft_host / ft_n * 1e3, ft_max * 1e3,
+                (g_perf_bake - ft_bake) / ft_n * 1e3, (g_perf_clip - ft_clip) / ft_n * 1e3, (g_perf_gl - ft_gl) / ft_n * 1e3);
+        ft_tot = ft_prep = ft_host = ft_max = 0; ft_n = 0;
+        ft_bake = g_perf_bake; ft_clip = g_perf_clip; ft_gl = g_perf_gl;
     }
     ss22_dsp_vblank();                                     /* INT0, when the game has enabled the DSP IRQs */
     vblank_slices = 2;
