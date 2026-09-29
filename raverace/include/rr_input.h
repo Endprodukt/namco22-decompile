@@ -21,6 +21,7 @@ void rr_input_bind_key(int a, SDL_Scancode sc);
 typedef struct {
     int axis; bool invert, half;
     char guid[40];
+    int shape_axes, shape_buttons;   /* the bound device's axes and buttons (0 = not recorded): one wheel can be several devices under one GUID */
     int direction, rest;
     bool rest_valid;
 } rr_joyaxis_t;
@@ -28,6 +29,9 @@ void rr_input_capture_begin(int action);
 bool rr_input_capture_event(int action, const SDL_Event *e);
 void rr_input_binding_label(int action, char *text, size_t size);
 bool rr_input_device_matches(SDL_Joystick *js, const char *guid);
+/* the device an axis is bound to: its GUID and, when recorded, its axis and button counts -- a Fanatec DD base is two
+ * "FANATEC Wheel"s under one GUID (12 axes / 63 buttons and 8 axes / 108 buttons) */
+bool rr_input_axis_device(const rr_joyaxis_t *ax, SDL_Joystick *js);
 bool rr_input_button_matches(int action, SDL_Joystick *js, int button);
 double rr_input_pedal_value(rr_joyaxis_t *axis, int value);
 extern rr_joyaxis_t g_joy_steer, g_joy_gas, g_joy_brake;

@@ -135,6 +135,11 @@ void rr_input_load(const char *path)
             snprintf(ax->guid, sizeof ax->guid, "%s", v);
             continue;
         }
+        if (!strcmp(k, "joy_steer_shape") || !strcmp(k, "joy_gas_shape") || !strcmp(k, "joy_brake_shape")) {
+            rr_joyaxis_t *ax = k[4] == 's' ? &g_joy_steer : k[4] == 'g' ? &g_joy_gas : &g_joy_brake;
+            if (sscanf(v, "A%dB%d", &ax->shape_axes, &ax->shape_buttons) != 2) ax->shape_axes = ax->shape_buttons = 0;
+            continue;
+        }
         if (!strncmp(k, "joy_button_", 11)) {
             for (int a = 0; a < RR_ACT_N; a++) {
                 char key[64]; snprintf(key, sizeof key, "joy_button_%s", act_name[a]);
@@ -327,6 +332,11 @@ bool rr_input_device_matches(SDL_Joystick *js, const char *guid)
     SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), current, sizeof current);
     return !strcmp(current, guid);
 }
+bool rr_input_axis_device(const rr_joyaxis_t *ax, SDL_Joystick *js)
+{
+    if (!rr_input_device_matches(js, ax->guid)) return false;
+    return !ax->shape_axes || (SDL_JoystickNumAxes(js) == ax->shape_axes && SDL_JoystickNumButtons(js) == ax->shape_buttons);
+}
 bool rr_input_button_matches(int a, SDL_Joystick *js, int button)
 {
     return a >= 0 && a < RR_ACT_N && button >= 0 && g_joy_button[a] == button &&
@@ -385,6 +395,8 @@ bool rr_input_capture_event(int a, const SDL_Event *e)
         ax->direction = steer ? 0 : delta > 0 ? 1 : -1;
         ax->rest = rest; ax->rest_valid = true;
         SDL_JoystickGetGUIDString(SDL_JoystickGetGUID(js), ax->guid, sizeof ax->guid);
+        ax->shape_axes = SDL_JoystickNumAxes(js);
+        ax->shape_buttons = SDL_JoystickNumButtons(js);
         const char *key = steer ? "joy_steer" : a == RR_GAS ? "joy_gas" : "joy_brake";
         char value[64], guidkey[64];
         snprintf(value, sizeof value, "%d%s%s", index, ax->invert ? " invert" : "",
@@ -392,6 +404,9 @@ bool rr_input_capture_event(int a, const SDL_Event *e)
         rr_input_set_option("rr_controls.cfg", key, value);
         snprintf(guidkey, sizeof guidkey, "%s_guid", key);
         rr_input_set_option("rr_controls.cfg", guidkey, ax->guid);
+        snprintf(guidkey, sizeof guidkey, "%s_shape", key);
+        snprintf(value, sizeof value, "A%dB%d", ax->shape_axes, ax->shape_buttons);
+        rr_input_set_option("rr_controls.cfg", guidkey, value);
         return true;
     }
     return false;
