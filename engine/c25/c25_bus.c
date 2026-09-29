@@ -10,10 +10,12 @@
 #include <string.h>
 #include "c25.h"
 
+#ifdef C25_DEV_HOOKS
 void (*c25_hook_acc)(int kind, int space, uint32_t a, uint32_t v);
 void (*c25_hook_pre)(c71_t *d, int pc);
 void (*c25_hook_iter)(void);
 void (*c25_hook_post)(c71_t *d);
+#endif
 
 static uint32_t sx24(uint32_t v) { return (uint32_t)((int32_t)(v << 8) >> 8); }
 
@@ -39,7 +41,11 @@ static void point_write(c71_t *d, uint32_t a, uint32_t v)
 
 static void mark(c71_t *d, uint32_t i)
 {
+#ifdef C25_TRACK_WRITTEN_ON
     if (!d->written[i]) { d->written[i] = 1; d->n_written++; }
+#else
+    (void)d; (void)i;
+#endif
 }
 
 static uint32_t poly_r(c71_t *d, uint32_t i) { return d->poly[i & 0x7FFF]; }
@@ -142,12 +148,18 @@ static uint16_t dr0(c71_t *d, uint32_t a)
     return d->ram[a];
 }
 
-uint16_t c25_dr(c71_t *d, uint32_t a) { uint16_t v = dr0(d, a); if (c25_hook_acc) c25_hook_acc('r', 'D', a & 0xFFFF, v); return v; }
+uint16_t c25_dr(c71_t *d, uint32_t a) { uint16_t v = dr0(d, a);
+#ifdef C25_DEV_HOOKS
+    if (c25_hook_acc) c25_hook_acc('r', 'D', a & 0xFFFF, v);
+#endif
+    return v; }
 
 void c25_dw(c71_t *d, uint32_t a, uint32_t v)
 {
     a &= 0xFFFF; v &= 0xFFFF;
+#ifdef C25_DEV_HOOKS
     if (c25_hook_acc) c25_hook_acc('w', 'D', a, v);
+#endif
     if (a == 2) d->tim = v;
     if (a == 3) d->prd = v;
     if (a == 4) d->imr = v;
@@ -174,11 +186,17 @@ static uint16_t port_in0(c71_t *d, int pa)
     }
 }
 
-uint16_t c25_port_in(c71_t *d, int pa) { uint16_t v = port_in0(d, pa); if (c25_hook_acc) c25_hook_acc('r', 'I', pa, v); return v; }
+uint16_t c25_port_in(c71_t *d, int pa) { uint16_t v = port_in0(d, pa);
+#ifdef C25_DEV_HOOKS
+    if (c25_hook_acc) c25_hook_acc('r', 'I', pa, v);
+#endif
+    return v; }
 
 void c25_port_out(c71_t *d, int pa, uint16_t v)
 {
+#ifdef C25_DEV_HOOKS
     if (c25_hook_acc) c25_hook_acc('w', 'I', pa, v);
+#endif
     switch (pa) {
     /* MAME point_hiword_w / point_loword_iw / point_address_w */
     case 1: d->pt_data = (uint32_t)v << 16; break;
@@ -193,6 +211,14 @@ void c25_port_out(c71_t *d, int pa, uint16_t v)
     }
 }
 
-uint16_t c25_pr(c71_t *d, uint16_t a) { uint16_t v = d->prog[a]; if (c25_hook_acc) c25_hook_acc('r', 'P', a, v); return v; }
-void c25_pw(c71_t *d, uint16_t a, uint16_t v) { if (c25_hook_acc) c25_hook_acc('w', 'P', a, v); d->prog[a] = v; }
+uint16_t c25_pr(c71_t *d, uint16_t a) { uint16_t v = d->prog[a];
+#ifdef C25_DEV_HOOKS
+    if (c25_hook_acc) c25_hook_acc('r', 'P', a, v);
+#endif
+    return v; }
+void c25_pw(c71_t *d, uint16_t a, uint16_t v) {
+#ifdef C25_DEV_HOOKS
+    if (c25_hook_acc) c25_hook_acc('w', 'P', a, v);
+#endif
+    d->prog[a] = v; }
 

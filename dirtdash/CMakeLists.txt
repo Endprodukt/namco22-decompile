@@ -40,7 +40,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/gen/dd_c25.c
   DEPENDS ../tools/gen/c25_translate.py tools/gen/c25.cov ../engine/c25/c71_bios.inc
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMENT "Translating the master DSP program to C")
-set_source_files_properties(gen/dd_c25.c PROPERTIES COMPILE_OPTIONS "-O1;-w")
+set_source_files_properties(gen/dd_c25.c PROPERTIES COMPILE_OPTIONS "-O2;-w")
 
 # The SOUND MCU program (dt1dataa.8k -- the S22-BIOS ver1.41 and the game's sound program, which also
 # reads the cabinet's ports), translated to C from the ROM file by the shared tools/gen/snd_translate.py
@@ -106,13 +106,13 @@ set(DD_C25_DEFS "")
 add_executable(dd_oracle ${DD_CORE_SRC} ${DD_C25_SRC} ${NAMCO22_C25_ORACLE_SRC}
     ${NAMCO22_TOOLS_DIR}/sndoracle/m37710.c ${NAMCO22_TOOLS_DIR}/sndoracle/sound_oracle.c)
 target_compile_options(dd_oracle PRIVATE -Wall)
-target_compile_definitions(dd_oracle PRIVATE DD_ORACLE SS22_ORACLE ${DD_C25_DEFS})
+target_compile_definitions(dd_oracle PRIVATE DD_ORACLE SS22_ORACLE C25_DEV_HOOKS ${DD_C25_DEFS})
 target_link_libraries(dd_oracle ${SDL2_LIBRARIES} OpenGL::GL ZLIB::ZLIB m)
 
 # instruction-trace build: every instruction logs PC + D0-D7/A0-A7 (RR_TRACE_FILE); the T3 proof against MAME's register trace
 add_executable(dd_trace ${DD_CORE_SRC} ${DD_C25_SRC} ${NAMCO22_C25_ORACLE_SRC}
     ${NAMCO22_TOOLS_DIR}/sndoracle/m37710.c ${NAMCO22_TOOLS_DIR}/sndoracle/sound_oracle.c)
 target_compile_options(dd_trace PRIVATE -Wall)
-target_compile_definitions(dd_trace PRIVATE RR_TRACE DD_ORACLE SS22_ORACLE ${DD_C25_DEFS})
+target_compile_definitions(dd_trace PRIVATE RR_TRACE DD_ORACLE SS22_ORACLE C25_DEV_HOOKS ${DD_C25_DEFS})
 target_link_libraries(dd_trace ${SDL2_LIBRARIES} OpenGL::GL ZLIB::ZLIB m)
 endif()

@@ -209,6 +209,9 @@ static inline bool misc(c71_t *d, int op, int pc)
 }
 
 /* ONE instruction word `op` at `pc`, iteration `it` of its RPT repeats. */
+#if defined(__GNUC__)
+__attribute__((always_inline))
+#endif
 static inline bool c25_exec(c71_t *d, int pc, int op, int it)
 {
     int hi = (op >> 8) & 0xFF, lo = op & 0xFF;

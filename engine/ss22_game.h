@@ -20,6 +20,7 @@ typedef struct {
     const char *pointrom[3][4];              /* plane 0 = low bytes ... plane 2 = high */
     int         chips;                       /* per plane (3 or 4) */
     bool      (*xlat)(c71_t *d, int pc);     /* gen/<game>_c25.c: the master program translated to C */
+    uint16_t    spin_pc, spin_op;            /* optional busy-wait the engine fast-forwards (engine/c25/c25.h); 0 = none */
 } ss22_dsp_cfg;
 
 /* the sound board: the S22-BIOS + sound program, the wave ROMs, what the MCU reads of the cabinet */

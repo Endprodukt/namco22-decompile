@@ -103,6 +103,7 @@ static void setup(c71_t *d, uint32_t *poly)
     d->idle_halts = 1;                    /* TI IDLE: INTM 0, halt until an interrupt */
     d->port3_bioz = 1;
     d->xlat = g_ss22_game->dsp.xlat;
+    d->spin_pc = g_ss22_game->dsp.spin_pc; d->spin_op = g_ss22_game->dsp.spin_op;
     d->slave_w = slave_w; d->port3_r = port3_r;    /* render_w: not used on Super 22 */
     d->pdp_begin = ss22_video_pdp_begin;    /* MAME's render_frame_active: which screen updates draw the list (engine/frame_rule.h) */
     d->render_reset = ss22_video_render_refresh;

@@ -82,6 +82,14 @@ typedef struct c71 {
                                          0: IDLE does nothing (Prop Cycle's host parks the master itself) */
     int port3_bioz;                   /* 1: a port-3 read sets the BIO pin busy again (Rave Racer) */
 
+    /* Busy-wait fast-forward (c71_run, engine/c25/c25_core.c): a "LAC *mem / BNEZ self"
+     * pair at spin_pc polls a word only the host (between run calls) changes, so while it
+     * reads nonzero the loop cannot exit within the call and is fast-forwarded like IDLE.
+     * spin_pc == 0 disables it. Game builds only (not compiled into C25_DEV_HOOKS builds:
+     * the gates compare plain stepping). */
+    uint16_t spin_pc;                 /* the LAC's pc; BNEZ-self must follow it */
+    uint16_t spin_op;                 /* the expected LAC opcode (direct: bit 7 of the low byte clear) */
+
     /* ---- the translated program --------------------------------------------- */
     /* Executes the instruction at pc with its RPT repeats (pc already known to
      * be at an instruction boundary). Returns false on a fault (d->error). */
@@ -89,11 +97,20 @@ typedef struct c71 {
     const uint16_t *ops;              /* the translation's constant words while one executes */
 } c71_t;
 
-/* Development hooks (tools/c25oracle): NULL in the game. */
+/* Development hooks (tools/c25oracle): compiled in only where the oracle or a
+ * gate needs them (C25_DEV_HOOKS); game builds neither define nor test them. */
+#ifdef C25_DEV_HOOKS
 extern void (*c25_hook_acc)(int kind, int space, uint32_t a, uint32_t v);
 extern void (*c25_hook_pre)(c71_t *d, int pc);
 extern void (*c25_hook_iter)(void);
 extern void (*c25_hook_post)(c71_t *d);
+#endif
+
+/* polygon-RAM write bookkeeping (written[]/n_written): Prop Cycle's stats and
+ * the lockstep compare read it; the ss22 games never do. On where consumed. */
+#if defined(SS22_ORACLE) || defined(PROPCYCL_ORACLE) || defined(C25_DEV_HOOKS) || defined(C25_TRACK_WRITTEN)
+#define C25_TRACK_WRITTEN_ON 1
+#endif
 
 /* Load the BIOS (c71.bin, 8 KB at program 0) and the game's master program
  * (at program 0x4000). Either path may be NULL. Returns false on a read error. */

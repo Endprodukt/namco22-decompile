@@ -96,6 +96,7 @@ bool rr_dsp_init(const char *dir)
     /* THE PROGRAM: translated to C at build time (gen/rr_c25.c). The oracle
      * builds can run the interpreter instead (RR_C25=oracle) -- the gate. */
     { extern bool rr_c25_exec(c71_t *, int); m->xlat = rr_c25_exec; }
+    m->spin_pc = 0x452D; m->spin_op = 0x2000;    /* the master's LAC *0 / BNEZ poll (~44.9M of ~54M retired steps in attract) */
 #ifdef RR_ORACLE
     { const char *e = getenv("RR_C25"); if (e && !strcmp(e, "oracle")) { c25_oracle_use(m); fprintf(stderr, "[DSP] master program: the interpreter ORACLE\n"); } }
 #endif

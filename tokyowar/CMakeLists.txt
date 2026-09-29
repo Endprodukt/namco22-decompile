@@ -40,7 +40,7 @@ add_custom_command(OUTPUT ${CMAKE_CURRENT_SOURCE_DIR}/gen/tw_c25.c
   DEPENDS ../tools/gen/c25_translate.py tools/gen/c25.cov ../engine/c25/c71_bios.inc
   WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
   COMMENT "Translating the master DSP program to C")
-set_source_files_properties(gen/tw_c25.c PROPERTIES COMPILE_OPTIONS "-O1;-w")
+set_source_files_properties(gen/tw_c25.c PROPERTIES COMPILE_OPTIONS "-O2;-w")
 
 # The SOUND MCU program (tw1data.8k -- the S22-BIOS ver1.41 and the game's sound program, which also
 # reads the cabinet's ports), translated to C from the ROM file by the shared tools/gen/snd_translate.py
@@ -108,6 +108,6 @@ target_link_libraries(tw_trace ${SDL2_LIBRARIES} OpenGL::GL ZLIB::ZLIB m)
 add_executable(tw_oracle ${TW_CORE_SRC} ${NAMCO22_C25_ORACLE_SRC}
     ${NAMCO22_TOOLS_DIR}/sndoracle/m37710.c ${NAMCO22_TOOLS_DIR}/sndoracle/sound_oracle.c)
 target_compile_options(tw_oracle PRIVATE -Wall)
-target_compile_definitions(tw_oracle PRIVATE TW_ORACLE SS22_ORACLE)
+target_compile_definitions(tw_oracle PRIVATE TW_ORACLE SS22_ORACLE C25_DEV_HOOKS)
 target_link_libraries(tw_oracle ${SDL2_LIBRARIES} OpenGL::GL ZLIB::ZLIB m)
 endif()

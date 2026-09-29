@@ -20,16 +20,21 @@ bool c71_step(c71_t *d)
     /* interrupts at the instruction boundary, in TMS32025 priority order:
      * INT0 2, INT1 4, INT2 6, TINT 0x18, RINT 0x1A, XINT 0x1C */
     if (!d->intm) {
-        static const struct { uint16_t bit, imr, vec; } iv[] = {
-            {1, 1, 2}, {2, 2, 4}, {4, 4, 6}, {8, 8, 0x18}, {0x10, 0x10, 0x1A}, {0x20, 0x20, 0x1C} };
         if (d->tint_pend) d->ifr |= 8;
-        for (int k = 0; k < 6; k++)
-            if ((d->ifr & iv[k].bit) && (d->imr & iv[k].imr)) {
-                if (!push(d, d->pc)) return false;
-                d->pc = iv[k].vec; d->intm = 1; d->ifr &= ~iv[k].bit; d->idle = 0;
-                if (iv[k].bit == 8) d->tint_pend = 0;
-                break;
-            }
+        /* the scan only acts on a bit set in BOTH ifr and imr, so one mask test
+         * short-circuits it (games park permanently-pending MASKED bits in ifr) */
+        unsigned pend = d->ifr & d->imr & 0x3F;
+        if (pend) {
+            static const struct { uint16_t bit, imr, vec; } iv[] = {
+                {1, 1, 2}, {2, 2, 4}, {4, 4, 6}, {8, 8, 0x18}, {0x10, 0x10, 0x1A}, {0x20, 0x20, 0x1C} };
+            for (int k = 0; k < 6; k++)
+                if (pend & iv[k].bit) {
+                    if (!push(d, d->pc)) return false;
+                    d->pc = iv[k].vec; d->intm = 1; d->ifr &= ~iv[k].bit; d->idle = 0;
+                    if (iv[k].bit == 8) d->tint_pend = 0;
+                    break;
+                }
+        }
     }
     if (d->idle) {                        /* halted: nothing retires, the timer runs */
         d->tim = d->tim == 0 ? d->prd : (uint16_t)(d->tim - 1);
@@ -37,7 +42,9 @@ bool c71_step(c71_t *d)
         return true;
     }
     int pc = d->pc;
+#ifdef C25_DEV_HOOKS
     if (c25_hook_pre) c25_hook_pre(d, pc);
+#endif
     d->cur_pc = pc;
     d->steps++;
     /* TIM ticks once per retired instruction, reloading from PRD at 0 */
@@ -46,25 +53,22 @@ bool c71_step(c71_t *d)
     /* the instruction itself, with its RPT repeats: the translated program */
     if (!d->xlat) { snprintf(d->error, sizeof d->error, "no program translation"); return false; }
     if (!d->xlat(d, pc)) return false;
+#ifdef C25_DEV_HOOKS
     if (c25_hook_post) c25_hook_post(d);
+#endif
     return true;
 }
 
-/* Run `steps` steps, exactly as that many calls of c71_step would -- but an IDLE DSP is fast-forwarded.
- *
- * The C71 runs at 10 MIPS, so a frame is ~166,667 steps, and the master DSP spends ~93% of them halted on IDLE
- * waiting for the next frame's interrupt (measured on Rave Racer: ~12,000 retired instructions a frame). Each of
- * those halted steps did nothing but tick the timer -- and cost a whole c71_step call: about a third of the game's
- * CPU time on a fast PC, most of it on a slow one.
- *
- * While the DSP is halted, a step changes only TIM and TINT_PEND (see c71_step): nothing retires, no hook runs, no
- * counter moves. And nothing can wake the DSP inside this call except the timer: the other interrupts are raised
- * BETWEEN calls (c71_irq from the frame loop). So after one real step that leaves it halted:
- *   - if the timer can wake it (INTM 0, TINT enabled) it is skipped up to the step BEFORE the timer event;
- *   - otherwise every remaining step is skipped, TINT_PEND set if an event fell inside (INTM 1 case).
- * The timer arithmetic is closed-form: TIM counts down to 0, reloads PRD, and an "event" is a step that leaves
- * TIM == PRD. tools/c25_run_test.c checks this against c71_step, step for step, on random states. */
-static long idle_skip(c71_t *d, long n)
+/* Advance TIM as `n` retired (or halted) instructions would, without executing them: TIM counts
+ * down to 0, reloads PRD, and an "event" is a step that leaves TIM == PRD. Nothing can wake the
+ * DSP inside a c71_run call except the timer: the other interrupts are raised BETWEEN calls
+ * (c71_irq from the frame loop). So:
+ *   - if the timer can interrupt (INTM 0, TINT enabled) the advance stops at the step BEFORE the
+ *     timer event (normal stepping takes it);
+ *   - otherwise all n steps pass, TINT_PEND set if an event fell inside.
+ * `gran` rounds the consumed count down to whole iterations of a fast-forwarded loop (1 = steps).
+ * tools/c25_run_test.c checks this against c71_step, step for step, on random states. */
+static long tim_ff(c71_t *d, long n, long gran)
 {
     const int wake = !d->intm && (d->imr & 8);
     if (!d->intm && d->tint_pend) return 0;                 /* the next step takes the timer interrupt */
@@ -73,6 +77,7 @@ static long idle_skip(c71_t *d, long n)
     long k = tim > prd ? (long)(tim - prd) : (long)tim + 1;
     if (wake) {
         long m = n < k - 1 ? n : k - 1;                    /* stop before the event: normal stepping takes it */
+        m -= m % gran;
         d->tim = (uint16_t)(tim - (uint32_t)m);            /* m < k, so no reload and no event in between */
         return m;
     }
@@ -85,12 +90,50 @@ static long idle_skip(c71_t *d, long n)
     return n;
 }
 
+/* The C71 runs at 10 MIPS, so a frame is ~166,667 steps, and the master DSP spends ~93% of them halted on IDLE
+ * waiting for the next frame's interrupt (measured on Rave Racer: ~12,000 retired instructions a frame). Each of
+ * those halted steps did nothing but tick the timer -- and cost a whole c71_step call: about a third of the game's
+ * CPU time on a fast PC, most of it on a slow one. While the DSP is halted, a step changes only TIM and
+ * TINT_PEND (see c71_step): nothing retires, no hook runs, no counter moves -- so the halt fast-forwards. */
+static long idle_skip(c71_t *d, long n) { return tim_ff(d, n, 1); }
+
+#ifndef C25_DEV_HOOKS
+/* Busy-wait fast-forward (d->spin_pc, engine/c25/c25.h): a "LAC *mem / BNEZ self" pair polling a
+ * word only the host changes (between run calls). While the word reads nonzero the loop body --
+ * ACC = the word, no flags, no writes -- cannot exit within this call, so whole iterations pass
+ * in closed form (2 retired instructions each: the timer ticks twice). Dirt Dash's upload routine
+ * spends ~36% of all retired steps in such a loop waiting on polygon-RAM word 0. Game builds only:
+ * the dev-hook builds (the oracle gates) keep plain stepping so coverage and lockstep see every
+ * instruction. */
+static long spin_skip(c71_t *d, long n)
+{
+    const uint16_t pc = d->spin_pc, op = d->spin_op;
+    if (d->rpt) return 0;
+    if (d->prog[pc] != op || d->prog[(uint16_t)(pc + 1)] != 0xF580 ||
+        d->prog[(uint16_t)(pc + 2)] != pc) return 0;        /* BNEZ to the LAC must follow it */
+    if (op & 0x80) return 0;                                /* indirect LAC: not a plain poll */
+    uint32_t a = ((uint32_t)d->dp << 7) | (op & 0x7F);      /* LAC's direct address (c25_sem.h dma) */
+    int64_t v = c25_dr(d, a) & 0xFFFF;
+    if (d->sxm && (v & 0x8000)) v -= 0x10000;
+    v *= (int64_t)1 << ((op >> 8) & 0xF);                   /* load16's shift */
+    if ((uint32_t)v == 0) return 0;                         /* the word cleared: the next steps exit the loop */
+    long m = tim_ff(d, n & ~1L, 2);                         /* whole iterations (2 steps) only */
+    if (!m) return 0;
+    d->acc = (int32_t)(uint32_t)v;                          /* each iteration's LAC leaves ACC = the word */
+    d->steps += (uint64_t)m;
+    return m;
+}
+#endif
+
 bool c71_run(c71_t *d, long steps)
 {
     while (steps > 0) {
         if (!c71_step(d)) return false;
         steps--;
         if (d->idle && steps > 0) steps -= idle_skip(d, steps);
+#ifndef C25_DEV_HOOKS
+        else if (d->spin_pc && d->pc == d->spin_pc && steps > 0) steps -= spin_skip(d, steps);
+#endif
     }
     return true;
 }
