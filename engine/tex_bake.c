@@ -244,10 +244,14 @@ typedef struct {
     uint8_t  occupied;
     uint8_t  ref;              /* used since the eviction hand last passed (second chance) */
     uint16_t cap;              /* the bake cap this entry was made at */
-    GLuint   gl_texture;
+    GLuint   gl_texture;       /* per-quad path (PROPCYCL_TEXATLAS=0) */
+    uint16_t a_page, a_x, a_y; /* atlas: the slot's page and position */
+    float    ou, ov;           /* atlas: the slot's texcoord origin */
 } TexCacheEntry;
 
 static TexCacheEntry tex_cache[TEX_CACHE_SIZE];
+
+
 double g_bake_texels;
 int tex_frame_hits  = 0;
 int tex_frame_misses = 0;
@@ -267,6 +271,99 @@ static int pow2_up(int v, int lo, int hi)
     while (p < v && p < hi) p <<= 1;
     return p > hi ? hi : p;
 }
+
+/* ---------------------------------------------------------------- atlas ----
+ * Bakes land in SLOTS of a few large shared page textures instead of one GL
+ * texture per quad: at a scene change the per-quad scheme allocated dozens of
+ * fresh storages in one frame (a glTexImage2D per bake -- measured 35 ms in ONE
+ * frame at Dirt Dash's race start on a 1.8 GHz Iris 540), and every drawn quad
+ * paid a glBindTexture (run length ~1.08: batching is impossible). Pages are
+ * allocated once, baked into with glTexSubImage2D, and the draw pass binds a
+ * page once per run of quads. PROPCYCL_TEXATLAS=0 restores per-quad textures
+ * for A/B.
+ *
+ * Slots are exact-size (bw x bh, guard texel always included) from a shelf
+ * allocator with a first-fit free list of evicted rectangles; a page that can
+ * no longer fit a slot is reset round-robin (its cache entries are evicted and
+ * re-bake on demand, exactly as a budget eviction). A bake about to overwrite
+ * pixels calls the flush hook (quad_gl's pending batch holds texcoords into
+ * the pages: those quads must DRAW before the bytes change). */
+#define ATLAS_DIM  2048
+#define ATLAS_MAXP 28                          /* 28 x 16 MB pages = 448 MB, the old byte budget's spirit */
+typedef struct { uint16_t x, y, w, h; } arect;
+typedef struct {
+    GLuint tex;
+    int cx, cy, row_h;                         /* shelf cursor */
+    arect fr[512]; int nfr;                    /* evicted rectangles */
+} apage;
+static apage apages[ATLAS_MAXP];
+static int  ap_n, ap_reset_hand;
+static int  g_tex_atlas = -1;                  /* lazy env read */
+static void (*atlas_flush_hook)(void);
+void tex_bake_set_flush_hook(void (*f)(void)) { atlas_flush_hook = f; }
+
+static int atlas_on(void)
+{
+    if (g_tex_atlas < 0) { const char *e = getenv("PROPCYCL_TEXATLAS"); g_tex_atlas = !(e && *e == '0'); }
+    return g_tex_atlas && !g_tex_pow2sample && !g_tex_pow2alloc;   /* the A/B legacy paths keep per-quad textures */
+}
+int tex_bake_atlas_active(void) { return atlas_on(); }
+
+static void atlas_page_init(int i)
+{
+    glGenTextures(1, &apages[i].tex);
+    glBindTexture(GL_TEXTURE_2D, apages[i].tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ATLAS_DIM, ATLAS_DIM, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    apages[i].cx = apages[i].cy = apages[i].row_h = 0;
+    apages[i].nfr = 0;
+}
+
+/* evict every cache entry living on page p (a page reset) */
+static void atlas_page_reset(int p);
+
+static int atlas_alloc(int w, int h, int *out_page, int *out_x, int *out_y)
+{
+    for (int tries = 0; tries < ATLAS_MAXP + 1; tries++) {
+        for (int i = 0; i < ap_n; i++) {
+            apage *p = &apages[i];
+            for (int k = 0; k < p->nfr; k++)                     /* first fit among evicted rects */
+                if (p->fr[k].w >= w && p->fr[k].h >= h) {
+                    int x = p->fr[k].x, y = p->fr[k].y;
+                    arect r = p->fr[k];
+                    p->fr[k] = p->fr[--p->nfr];
+                    if (r.w - w >= 16 && p->nfr < 512) { p->fr[p->nfr++] = (arect){ (uint16_t)(x + w), (uint16_t)y, (uint16_t)(r.w - w), (uint16_t)h }; }
+                    if (r.h - h >= 16 && p->nfr < 512) { p->fr[p->nfr++] = (arect){ (uint16_t)x, (uint16_t)(y + h), (uint16_t)r.w, (uint16_t)(r.h - h) }; }
+                    *out_page = i; *out_x = x; *out_y = y; return 1;
+                }
+            /* shelf */
+            if (p->cx + w > ATLAS_DIM) { p->cy += p->row_h; p->cx = 0; p->row_h = 0; }
+            if (p->cy + h <= ATLAS_DIM) {
+                int x = p->cx, y = p->cy;
+                p->cx += w; if (h > p->row_h) p->row_h = h;
+                *out_page = i; *out_x = x; *out_y = y; return 1;
+            }
+        }
+        if (ap_n < ATLAS_MAXP) { atlas_page_init(ap_n++); continue; }
+        atlas_page_reset(ap_reset_hand);                          /* all pages full: take the oldest's space */
+        ap_reset_hand = (ap_reset_hand + 1) % ap_n;
+    }
+    return 0;                                    /* unreachable, but never loop forever */
+}
+
+static void atlas_free(int page, int x, int y, int w, int h)
+{
+    apage *p = &apages[page];
+    if (p->nfr < 512) p->fr[p->nfr++] = (arect){ (uint16_t)x, (uint16_t)y, (uint16_t)w, (uint16_t)h };
+    /* a full free list just leaks the rect until the page's next reset */
+}
+
+GLuint tex_bake_atlas_page(int p) { return apages[p].tex; }
+
+/* ----------------------------------------------------------------- */
 
 /* Free list of texture OBJECTS with their allocated storage size.
  *
@@ -344,6 +441,22 @@ int tex_cache_live = 0;
 static int    tex_evict_hand  = 0;
 static int tex_cache_total = 0;
 
+/* (atlas) a page reset evicts every entry whose slot is on it */
+static void atlas_page_reset(int p)
+{
+    for (int i = 0; i < TEX_CACHE_SIZE; i++) {
+        TexCacheEntry *e = &tex_cache[i];
+        if (e->occupied && e->a_page == p) {
+            tex_cache_bytes -= e->bytes;
+            tex_cache_total--;
+            tex_cache_evictions++;
+            e->occupied = 0;
+        }
+    }
+    apages[p].cx = apages[p].cy = apages[p].row_h = 0;
+    apages[p].nfr = 0;
+}
+
 /* Static pixel buffer for baking (TEX_BAKE_MAX^2 RGBA, reused each bake) */
 static uint8_t tex_pixel_buf[(1024 + 1) * (1024 + 1) * 4];   /* up to the 1024 cap + guard texel */
 
@@ -360,6 +473,8 @@ static GLuint gen_texture(void)
 
 void renderer_texture_init(void) {
     if (gen_n) { glDeleteTextures(gen_n, gen_pool); gen_n = 0; }
+    for (int i = 0; i < ap_n; i++) glDeleteTextures(1, &apages[i].tex);
+    ap_n = 0; ap_reset_hand = 0;
     /* Delete any live textures rather than just dropping the entries --
      * calling this a second time would otherwise orphan every texture the
      * cache holds. Safe at startup: occupied is zero, so nothing is freed. */
@@ -401,7 +516,7 @@ static uint32_t tex_cache_hash(int min_u, int min_v, int range_u, int range_v,
  */
 static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
                         int texbank, int pal_group, int cmode,
-                        float *out_su, float *out_sv,
+                        float *out_su, float *out_sv, float *out_ou, float *out_ov,
                         int force_cap,      /* > 0: at most this cap (a coarse placeholder) */
                         int peek)           /* 1: only look in the cache -- 0 on a miss, nothing baked, no miss counted */ {
     /* Expand degenerate UV ranges to minimum 16 texels */
@@ -435,7 +550,9 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
             e->ref = 1;
             if (out_su) *out_su = e->su;
             if (out_sv) *out_sv = e->sv;
-            return e->gl_texture;
+            if (out_ou) *out_ou = e->ou;
+            if (out_ov) *out_ov = e->ov;
+            return atlas_on() ? apages[e->a_page].tex : e->gl_texture;
         }
     }
     if (peek) return 0;
@@ -597,6 +714,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
      * the boundary sample itself. */
     int bw = (sw < tw) ? sw + 1 : sw;
     int bh = (sh < th) ? sh + 1 : sh;
+    if (atlas_on()) { bw = sw + 1; bh = sh + 1; }   /* atlas slots always have room for the guard texel */
     g_bake_texels += (double)bw * bh;
     /* THE HOT LOOP OF THE WHOLE RENDERER. Measured over a 3600-frame run:
      * 1046 MILLION texels baked, 14.0 s of a 17.8 s flush -- and in gameplay
@@ -625,6 +743,13 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
         for (int px = 0; px < bw; px++) tu_row[px] = min_u + px * range_u / sw;
     else
         for (int px = 0; px < bw; px++) tu_row[px] = min_u + px * step_u;
+    /* atlas slots always have room for the guard texel, but the per-texture
+     * layout had room only when the pow2 bucket did; in the exact case the
+     * sample hit CLAMP_TO_EDGE, i.e. the LAST REAL texel, not the neighbour.
+     * Repeat it, or every such quad's far edge reads the next tile over. */
+    const int atlas_clamp_u = atlas_on() && !(pow2_up(sw, 8, cap) > sw);
+    const int atlas_clamp_v = atlas_on() && !(pow2_up(sh, 8, cap) > sh);
+    if (atlas_clamp_u) tu_row[sw] = tu_row[sw - 1];
 
     /* 2. the palette group's 256 colours, pre-packed as the RGBA bytes the
      *    buffer wants (alpha 0 marks the transparent pen, exactly as the
@@ -641,6 +766,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     for (int py = 0; py < bh; py++) {
         int tv = g_tex_pow2sample ? min_v + py * range_v / sh
                                   : min_v + py * step_v;
+        if (atlas_clamp_v && py == sh) tv = min_v + (sh - 1) * step_v;   /* same CLAMP emulation on the guard row */
         int v  = (tv & 0xFFF) | (texbank * 0x1000);
         int vrow = (v & 0xFFF0) << 4;            /* tilemap row base */
         int local_y0 = v & 0xF;
@@ -686,8 +812,10 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     }
 
     /* Upload to GL (NEAREST filtering — pixel art, no blurring) */
-    /* Find the slot first so an eviction can donate its texture object. */
+    /* Find the slot first so an eviction can donate its texture object (per-quad
+     * path) or free its atlas rect. */
     GLuint tex = 0;
+    int slot_page = 0, slot_x = 0, slot_y = 0;
     TexCacheEntry *slotp = NULL;
     for (int probe = 0; probe < TEX_CACHE_PROBES; probe++) {
         TexCacheEntry *e = &tex_cache[(h + probe) & TEX_CACHE_MASK];
@@ -695,12 +823,34 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     }
     if (!slotp) {
         slotp = &tex_cache[h & TEX_CACHE_MASK];
-        tex = slotp->gl_texture;          /* reuse, do NOT delete */
+        if (atlas_on()) atlas_free(slotp->a_page, slotp->a_x, slotp->a_y, slotp->alloc_w, slotp->alloc_h);
+        else tex = slotp->gl_texture;         /* reuse, do NOT delete */
         tex_cache_bytes -= slotp->bytes;
         tex_cache_total--;
         tex_cache_evictions++;
         slotp->occupied = 0;
     }
+    if (atlas_on()) {
+        /* Pages are preallocated; a bake is a slot alloc + glTexSubImage2D.
+         * The slot always has room for the guard texel, so bw/bh are the bake
+         * size outright (the pow2-exact clamp case never happens). */
+        int pg = 0, ax = 0, ay = 0;
+        atlas_alloc(bw, bh, &pg, &ax, &ay);          /* never fails: a full atlas resets a page */
+        if (atlas_flush_hook) atlas_flush_hook();    /* buffered quads hold texcoords into the pages: draw them before the bytes change */
+        glBindTexture(GL_TEXTURE_2D, apages[pg].tex);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, ax, ay, bw, bh, GL_RGBA, GL_UNSIGNED_BYTE, tex_pixel_buf);
+        tex_subimages++;
+        tex = apages[pg].tex;
+        slot_page = pg; slot_x = ax; slot_y = ay;
+        /* texel d/step of the bake sits at slot texel d/step: normalized, that
+         * is ou + ((u-bmin)+cu)/brange * range/(step*DIM) */
+        su = (float)range_u / (float)(step_u * ATLAS_DIM);
+        sv = (float)range_v / (float)(step_v * ATLAS_DIM);
+        if (out_su) *out_su = su;
+        if (out_sv) *out_sv = sv;
+        if (out_ou) *out_ou = (float)ax / ATLAS_DIM;
+        if (out_ov) *out_ov = (float)ay / ATLAS_DIM;
+    } else {
     int had_w = slotp->alloc_w, had_h = slotp->alloc_h;
     if (!tex) {
         tex = tex_free_pop(tw, th, &had_w, &had_h);
@@ -736,6 +886,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
      * profile put 28.8% of the entire run inside __vdso_clock_gettime called
      * from libnvidia-eglcore, which is what a driver spinning on a fence
      * looks like. PROPCYCL_TEXORPHAN=0 restores the old behaviour for A/B. */
+    if (atlas_flush_hook) atlas_flush_hook();   /* a recycled object's storage is about to be discarded/replaced: buffered quads draw first */
     if (!g_tex_orphan && had_w == tw && had_h == th) {
         tex_subimages++;
     } else {
@@ -745,6 +896,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     }
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, bw, bh,
                     GL_RGBA, GL_UNSIGNED_BYTE, tex_pixel_buf);
+    }
 
     /* Store in cache, EVICTING if the probe window is full.
      *
@@ -766,7 +918,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
      * evicted is the only thing this changes -- every bake is the same.
      * PROPCYCL_TEX_FIFO=1 restores the old hand. Bounded: two sweeps. */
     {
-        size_t incoming = (size_t)tw * th * 4;
+        size_t incoming = atlas_on() ? (size_t)bw * bh * 4 : (size_t)tw * th * 4;
         int guard = 0;
         while (tex_cache_bytes + incoming > TEX_CACHE_BYTE_BUDGET &&
                guard++ < 2 * TEX_CACHE_SIZE) {
@@ -774,7 +926,8 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
             tex_evict_hand = (tex_evict_hand + 1) & TEX_CACHE_MASK;
             if (!e->occupied || e == slotp) continue;
             if (e->ref && !g_tex_fifo) { e->ref = 0; continue; }
-            tex_free_push(e->gl_texture, e->alloc_w, e->alloc_h);
+            if (atlas_on()) atlas_free(e->a_page, e->a_x, e->a_y, e->alloc_w, e->alloc_h);
+            else tex_free_push(e->gl_texture, e->alloc_w, e->alloc_h);
             tex_cache_bytes -= e->bytes;
             tex_cache_total--;
             tex_cache_evictions++;
@@ -789,10 +942,16 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     slotp->cmode     = (uint8_t)(cmode & 0xF);
     slotp->cap       = (uint16_t)cap;
     slotp->gl_texture = tex;
-    slotp->alloc_w = (uint16_t)tw; slotp->alloc_h = (uint16_t)th;
+    if (atlas_on()) {
+        slotp->alloc_w = (uint16_t)bw; slotp->alloc_h = (uint16_t)bh;
+        slotp->a_page = (uint16_t)slot_page; slotp->a_x = (uint16_t)slot_x; slotp->a_y = (uint16_t)slot_y;
+        slotp->ou = (float)slot_x / ATLAS_DIM; slotp->ov = (float)slot_y / ATLAS_DIM;
+    } else {
+        slotp->alloc_w = (uint16_t)tw; slotp->alloc_h = (uint16_t)th;
+    }
     slotp->used_w  = (uint16_t)sw; slotp->used_h  = (uint16_t)sh;
     slotp->su = su; slotp->sv = sv;
-    slotp->bytes = (uint32_t)(tw * th * 4);
+    slotp->bytes = atlas_on() ? (uint32_t)(bw * bh * 4) : (uint32_t)(tw * th * 4);
     tex_cache_bytes += slotp->bytes;
     if (!slotp->occupied) tex_cache_total++;
     slotp->occupied = 1;
@@ -822,8 +981,9 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
 static double   ns_per_texel = REF_NS_PER_TEXEL;/* this machine's, smoothed from the bakes it has done */
 static double   now_ns(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec * 1e9 + t.tv_nsec; }
 /* The budgets are in texels sized for the reference speed; a slower machine (a 1440p GTX 1660 measured 12 ns) gets proportionally less per frame,
- * a faster one is never given more than configured. */
-static double budget_scale(void) { double k = REF_NS_PER_TEXEL / ns_per_texel; return k < 0.25 ? 0.25 : k > 1.0 ? 1.0 : k; }
+ * a faster one is never given more than configured. The floor matters: a 1.8 GHz mobile i5 bakes cold tilemap at ~50 ns a texel, where the old
+ * 0.25 floor still allowed 150k texels -- 30 ms -- in one frame (Dirt Dash's race start). Let it scale to 1/20th. */
+static double budget_scale(void) { double k = REF_NS_PER_TEXEL / ns_per_texel; return k < 0.05 ? 0.05 : k > 1.0 ? 1.0 : k; }
 static long     g_budget_draw, g_budget_pump;
 static int      budget_env_done;
 static double   frame_spent;
@@ -858,10 +1018,10 @@ static void budget_pump(void)                               /* the previous fram
         const PendingBake pb = pend[--pend_n];
         g_tex_bake_cap_req = pb.cap_req; g_tex_opaque = pb.opaque;
         float su, sv; const double t0 = g_bake_texels, c0 = now_ns();
-        bake_impl(pb.min_u, pb.min_v, pb.range_u, pb.range_v, pb.texbank, pb.pal_group, pb.cmode, &su, &sv, 0, 0);
+        bake_impl(pb.min_u, pb.min_v, pb.range_u, pb.range_v, pb.texbank, pb.pal_group, pb.cmode, &su, &sv, NULL, NULL, 0, 0);
         const double tx = g_bake_texels - t0;
         spent += tx;
-        if (tx >= 20000) ns_per_texel += 0.1 * ((now_ns() - c0) / tx - ns_per_texel);
+        if (tx >= 5000) ns_per_texel += 0.1 * ((now_ns() - c0) / tx - ns_per_texel);
         tex_refined++;
     }
     g_tex_bake_cap_req = req; g_tex_opaque = op;
@@ -870,27 +1030,27 @@ static void budget_pump(void)                               /* the previous fram
 
 GLuint bake_quad_texture(int min_u, int min_v, int range_u, int range_v,
                          int texbank, int pal_group, int cmode,
-                         float *out_su, float *out_sv) {
+                         float *out_su, float *out_sv, float *out_ou, float *out_ov) {
     if (!budget_env_done) budget_env();
-    if (g_budget_draw <= 0 || in_pump) return bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, 0, 0);
+    if (g_budget_draw <= 0 || in_pump) return bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, out_ou, out_ov, 0, 0);
     if (budget_frame != g_eng_frame) {                      /* a new shown frame: a fresh budget, and the refinement of what earlier frames coarsened */
         budget_frame = g_eng_frame; frame_spent = 0;
         if (g_budget_pump > 0) budget_pump(); else pend_n = 0;
     }
-    GLuint t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, 0, 1);       /* cached at full quality? */
+    GLuint t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, out_ou, out_ov, 0, 1);       /* cached at full quality? */
     if (t) return t;
     if (frame_spent < (double)g_budget_draw * budget_scale() || (range_u <= COARSE_CAP && range_v <= COARSE_CAP)) {
         const double t0 = g_bake_texels, c0 = now_ns();
-        t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, 0, 0);
+        t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, out_ou, out_ov, 0, 0);
         const double tx = g_bake_texels - t0;
         frame_spent += tx;
-        if (tx >= 20000) ns_per_texel += 0.1 * ((now_ns() - c0) / tx - ns_per_texel);      /* only bakes big enough to time */
+        if (tx >= 5000) ns_per_texel += 0.1 * ((now_ns() - c0) / tx - ns_per_texel);      /* only bakes big enough to time */
         return t;
     }
-    t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, COARSE_CAP, 1);       /* a placeholder already there? */
+    t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, out_ou, out_ov, COARSE_CAP, 1);       /* a placeholder already there? */
     if (t) return t;
     { const double t0 = g_bake_texels;
-      t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, COARSE_CAP, 0);
+      t = bake_impl(min_u, min_v, range_u, range_v, texbank, pal_group, cmode, out_su, out_sv, out_ou, out_ov, COARSE_CAP, 0);
       frame_spent += g_bake_texels - t0; }
     tex_placeholders++;
     if (pend_n < PEND_MAX) {                               /* (a full queue is fine: a quad drawn again with budget to spare bakes itself) */

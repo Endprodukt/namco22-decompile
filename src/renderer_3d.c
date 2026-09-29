@@ -104,7 +104,7 @@ extern int tex_frame_hits, tex_frame_misses, tex_cache_evictions;
 extern int tex_reallocs, tex_subimages;
 GLuint bake_quad_texture(int min_u, int min_v, int range_u, int range_v,
                          int texbank, int pal_group, int cmode,
-                         float *out_su, float *out_sv);
+                         float *out_su, float *out_sv, float *out_ou, float *out_ov);
 
 /* ========== Texture Lookup ========== */
 
@@ -2002,7 +2002,7 @@ static void geohw_flush(void)
                       ? (uint32_t)(geohw_buf[qi].zsort & 0xFFFFFF) : 0;
         uint32_t sz = (si < ni) ? items[si].z : 0;
         if (si < ni && (qi >= geohw_nbuf || sz >= qz))
-            geohw_draw_sprite_item(sst, &items[si++]);
+            { eng_draw_end(); geohw_draw_sprite_item(sst, &items[si++]); eng_draw_resume(); }   /* sprites draw with their own state: suspend the quad batch like ss22 does */
         else
             geohw_draw_one(&geohw_buf[qi++]);
     }
@@ -3456,10 +3456,10 @@ static void render_object(int code, float pos_x, float pos_y, float pos_z) {
                     if (bu < 0) bu = 0;
                     if (bv < 0) bv = 0;
 
-                    float qsu = 1.0f, qsv = 1.0f;
+                    float qsu = 1.0f, qsv = 1.0f, qou = 0.0f, qov = 0.0f;
                     GLuint qtex = bake_quad_texture(u_min, v_min, ru, rv,
                                                     texbank, pal_group, cmode,
-                                                    &qsu, &qsv);
+                                                    &qsu, &qsv, &qou, &qov);
 
                     glEnable(GL_TEXTURE_2D);
                     glBindTexture(GL_TEXTURE_2D, qtex);
@@ -3473,8 +3473,8 @@ static void render_object(int code, float pos_x, float pos_y, float pos_z) {
                          * at the TOP of the screen. We compensate by flipping
                          * V in the texture coord so the texture reads upright
                          * on screen. U is left as-is (X axis isn't scaled). */
-                        float tu = (float)(uv[v][0] - bu) / (float)bru * qsu;
-                        float tv = (1.0f - (float)(uv[v][1] - bv) / (float)brv) * qsv;
+                        float tu = qou + (float)(uv[v][0] - bu) / (float)bru * qsu;
+                        float tv = qov + (1.0f - (float)(uv[v][1] - bv) / (float)brv) * qsv;
                         glTexCoord2f(tu, tv);
                         glVertex3f(verts[v][0], verts[v][1], verts[v][2]);
                     }

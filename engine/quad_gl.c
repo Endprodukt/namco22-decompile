@@ -26,6 +26,39 @@ int    g_fogged_quads, g_fogA_min = 999, g_fogA_max = -999;
 int    g_tex_clipbox = 0;
 int    g_eng_degen_uv_legacy = 0;
 
+/* tracked GL state for the quad pass: valid only between eng_draw_begin/resume and
+ * eng_draw_end -- the sprite/text/post passes change state behind us, so resume
+ * marks it all unknown and the next quad re-issues what it needs. */
+static struct { int valid, tex_on, alpha_on, blend_on, env_scale, prio_mask; GLuint tex; } qs;
+static void qs_reset(void) { qs.valid = 0; qs.env_scale = -1; }
+static void qs_tex_on(int on) { if (!qs.valid || qs.tex_on != on) { if (on) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D); qs.tex_on = on; } }
+static void qs_bind(GLuint t) { if (!qs.valid || qs.tex != t) { glBindTexture(GL_TEXTURE_2D, t); qs.tex = t; } }
+static void qs_alpha(int on) { if (!qs.valid || qs.alpha_on != on) { if (on) glEnable(GL_ALPHA_TEST); else glDisable(GL_ALPHA_TEST); qs.alpha_on = on; } }
+static void qs_blend(int on) { if (!qs.valid || qs.blend_on != on) { if (on) { glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); } else glDisable(GL_BLEND); qs.blend_on = on; } }
+static void qs_prio_mask(int off) { if (!qs.valid || qs.prio_mask != off) { glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, off ? GL_FALSE : GL_TRUE); qs.prio_mask = off; } }
+static int qs_sc_on; static int qs_sc[4];
+static void qs_scissor(int on, const int *box)
+{
+    if (qs.valid && qs_sc_on == on && (!on || !memcmp(qs_sc, box, sizeof qs_sc))) return;
+    if (on) { glEnable(GL_SCISSOR_TEST); glScissor(box[0], box[1], box[2], box[3]); }
+    else glDisable(GL_SCISSOR_TEST);
+    qs_sc_on = on; if (on) memcpy(qs_sc, box, sizeof qs_sc);
+}
+
+
+/* 0 = plain GL_MODULATE; 1/2/4 = COMBINE with GL_RGB_SCALE headroom (see over-brightening below) */
+static void qs_env(int scale)
+{
+    if (qs.valid && qs.env_scale == scale) return;
+    if (!scale) glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    else {
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+        glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, (float)scale);
+    }
+    qs.env_scale = scale;
+}
+
 /* Perf timers are gated: a frame makes thousands of these calls (Prop Cycle
  * register row 121's note in renderer_3d.c). The game sets the flag once. */
 int g_perf_enabled = 0;
@@ -167,44 +200,125 @@ static int clip_to_screen(const geo_sv *in, int n, geo_sv *out)
  * it -- identical geometry, identical attributes, byte-identical output. */
 static float qa_xy[32 * 2], qa_rgba[32 * 4], qa_st[32 * 4];
 
+/* ---- batched triangles ---------------------------------------------------
+ * One glDrawArrays per quad cost ~1.2-5 us of driver time each, and with the
+ * bake atlas (engine/tex_bake.c) nearly every quad shares a page texture, so
+ * quads collect into BB_* as fan triangles and flush once per STATE RUN. */
+#define BB_MAXV 60000
+static float bb_xy[BB_MAXV * 2], bb_rgba[BB_MAXV * 4], bb_st[BB_MAXV * 4];
+static int bb_n, bb_valid;
+static struct bbstate { GLuint tex; int env, alpha, blend, prio, tex_on, sc_on; int sc[4]; float ou, ov; } bb_run;
+
+static void bb_flush(void)
+{
+    if (!bb_n) return;
+    glDrawArrays(GL_TRIANGLES, 0, bb_n);
+    bb_n = 0;
+}
+
+static void bb_apply(const struct bbstate *st)
+{
+    qs_tex_on(st->tex_on);
+    if (st->tex_on) {
+        qs_bind(st->tex); qs_env(st->env);
+        /* the atlas slot origin goes through the TEXTURE MATRIX: adding it to s,t
+         * per vertex rounds differently and measurably shifts texels under
+         * magnification (the Tokyo Wars gate catches it); (s,t,r,q) x
+         * translate(ou,ov) divides to ou + s/q -- the slot origin, exactly. */
+        glMatrixMode(GL_TEXTURE);
+        glLoadIdentity();
+        if (st->ou != 0.0f || st->ov != 0.0f) glTranslatef(st->ou, st->ov, 0.0f);
+        glMatrixMode(GL_MODELVIEW);
+    }
+    qs_alpha(st->alpha);
+    qs_blend(st->blend);
+    qs_prio_mask(st->prio);
+    qs_scissor(st->sc_on, st->sc);
+}
+
+/* qa_* hold the quad's clipped polygon: append it as fan triangles, flushing
+ * when the run's state changes or the buffer is full. */
+static void bb_emit(int n, const struct bbstate *st)
+{
+    static int nobatch = -1;                            /* ENG_NOBATCH=1: one draw per quad, for A/B bisection.
+                                                         * Per-quad textures (PROPCYCL_TEXATLAS=0) never batch:
+                                                         * every quad is its own texture, so runs are 1 anyway. */
+    if (nobatch < 0) { const char *e = getenv("ENG_NOBATCH"); nobatch = (e && *e == '1') || !tex_bake_atlas_active(); }
+    if (bb_valid && memcmp(st, &bb_run, sizeof bb_run) != 0) { bb_flush(); bb_valid = 0; }
+    if (!bb_valid) { bb_run = *st; bb_apply(st); bb_valid = 1; }
+    if (nobatch) bb_flush();                            /* start empty: draw just this quad below */
+    if (bb_n + (n - 2) * 3 > BB_MAXV) bb_flush();
+    for (int i = 1; i + 1 < n; i++)
+        for (int k = 0; k < 3; k++) {
+            int s = k == 0 ? 0 : i + k - 1;              /* fan: (0, i, i+1) */
+            bb_xy[bb_n*2+0] = qa_xy[s*2+0]; bb_xy[bb_n*2+1] = qa_xy[s*2+1];
+            memcpy(&bb_rgba[bb_n*4], &qa_rgba[s*4], 4 * sizeof(float));
+            memcpy(&bb_st[bb_n*4], &qa_st[s*4], 4 * sizeof(float));
+            bb_n++;
+        }
+    if (nobatch) { bb_flush(); bb_valid = 0; }
+}
+
+/* tex_bake's flush hook: a bake is about to overwrite page pixels the pending
+ * batch may still reference -- draw it, and re-apply state after (the bake's
+ * own bind/upload changed it behind our back). */
+static void bb_bake_hook(void) { bb_flush(); bb_valid = 0; qs_reset(); }
+/* the GL pass draws the fan-triangulated expansion of qa_*: Mesa tessellates
+ * GL_POLYGON per call (measured ~4-6 us/draw on a 1.8 GHz mobile CPU), so the
+ * fan is expanded on our side and drawn as GL_TRIANGLES -- same triangles the
+ * driver would have made, byte-identical output */
+
 /* read once per batch, not per quad: every glGet makes a threaded GL driver (NVIDIA on Windows) wait for its worker thread */
 static GLint draw_vp[4];
 
 void eng_draw_begin(void)
 {
+    static int hook_once;
+    if (!hook_once) { tex_bake_set_flush_hook(bb_bake_hook); hook_once = 1; }
     glGetIntegerv(GL_VIEWPORT, draw_vp);
     eng_draw_resume();
 }
 void eng_draw_resume(void)
 {
+    qs_reset();
+    bb_valid = 0;
     glEnableClientState(GL_VERTEX_ARRAY);
     glEnableClientState(GL_COLOR_ARRAY);
     glEnableClientState(GL_TEXTURE_COORD_ARRAY);
-    glVertexPointer(2, GL_FLOAT, 0, qa_xy);
-    glColorPointer(4, GL_FLOAT, 0, qa_rgba);
-    glTexCoordPointer(4, GL_FLOAT, 0, qa_st);
+    glVertexPointer(2, GL_FLOAT, 0, bb_xy);
+    glColorPointer(4, GL_FLOAT, 0, bb_rgba);
+    glTexCoordPointer(4, GL_FLOAT, 0, bb_st);
 }
 void eng_draw_end(void)
 {
+    bb_flush();
+    bb_valid = 0;
     glDisableClientState(GL_VERTEX_ARRAY);
     glDisableClientState(GL_COLOR_ARRAY);
     glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    /* restore the state the per-quad code used to leave behind: the sprite, text and
+     * post passes (and Rave Racer's 2D) were written against it (a leftover
+     * COMBINE/RGB_SCALE texenv visibly brightened Rave Racer's HUD) */
+    glDisable(GL_TEXTURE_2D);
+    glEnable(GL_ALPHA_TEST);
+    glDisable(GL_BLEND);
+    glDisable(GL_SCISSOR_TEST);
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+    glMatrixMode(GL_TEXTURE); glLoadIdentity(); glMatrixMode(GL_MODELVIEW);
+    qs_reset();
 }
 
 static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
 {
     if (cfg->flat_white) {                 /* coverage probe: flat white, no texture */
         if (q->nrv < 3) return;
-        glDisable(GL_TEXTURE_2D);
-        glDisable(GL_ALPHA_TEST);
-        glDisable(GL_BLEND);
         int n = q->nrv > 32 ? 32 : q->nrv;
         for (int i = 0; i < n; i++) {
             qa_rgba[i*4+0] = qa_rgba[i*4+1] = qa_rgba[i*4+2] = qa_rgba[i*4+3] = 1.0f;
             qa_xy[i*2+0] = q->rv[i].sx16 / 16.0f; qa_xy[i*2+1] = q->rv[i].sy16 / 16.0f;
         }
-        glDrawArrays(GL_POLYGON, 0, n);
-        glEnable(GL_ALPHA_TEST);
+        bb_emit(n, &(struct bbstate){ .tex_on = 0, .alpha = 0, .blend = 0, .prio = 0, .sc_on = 0 });
         return;
     }
 
@@ -265,25 +379,26 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
     if (cminx > cmaxx || cminy > cmaxy) return;      /* fully clipped away */
     int scissored = !(cminx == sx0 && cminy == 0 &&
                       cmaxx == sx1 && cmaxy == ENG_SCREEN_H - 1);
+    int scbox[4] = { 0, 0, 0, 0 };
     if (scissored) {
         /* glScissor takes WINDOW pixels, but the scene is a 640x480 ortho
          * drawn into whatever viewport main.c set for the window (scaled,
          * letterboxed). Map the clip window through that viewport -- in
          * 640x480 scene pixels a larger window cut the ending's credits
          * window and the name-entry lens down to a corner (register row 192).
-         * Headless (viewport 0,0,640,480) is unchanged. */
+         * Headless (viewport 0,0,640,480) is unchanged. The box goes into the
+         * batch's run state; it is applied when the run flushes, not here. */
         const GLint *vp = draw_vp;
         double kx = (double)vp[2] / (g_scene_x1 - g_scene_x0), ky = (double)vp[3] / ENG_SCREEN_H;
         int x0 = vp[0] + (int)((cminx - g_scene_x0) * kx + 0.5);
         int x1 = vp[0] + (int)((cmaxx + 1 - g_scene_x0) * kx + 0.5);
         int y0 = vp[1] + (int)((ENG_SCREEN_H - 1 - cmaxy) * ky + 0.5);
         int y1 = vp[1] + (int)((ENG_SCREEN_H - cminy) * ky + 0.5);
-        glEnable(GL_SCISSOR_TEST);
-        glScissor(x0, y0, x1 - x0, y1 - y0);
+        scbox[0] = x0; scbox[1] = y0; scbox[2] = x1 - x0; scbox[3] = y1 - y0;
     }
 
     GLuint tex = 0;
-    float bsu = 1.0f, bsv = 1.0f;
+    float bsu = 1.0f, bsv = 1.0f, bou = 0.0f, bov = 0.0f;
     double _tb = eng_now();
     if (!solid) {
     /* su/sv are the fraction of the allocated texture the bake actually
@@ -312,7 +427,7 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
         g_tex_bake_cap_req = w > h ? w : h;
     }
     tex = bake_quad_texture(min_u, min_v, range_u, range_v,
-                                   q->texbank, pal_group, q->cmode, &bsu, &bsv);
+                                   q->texbank, pal_group, q->cmode, &bsu, &bsv, &bou, &bov);
     g_tex_bake_cap_req = 256;
     }
     g_perf_bake += eng_now() - _tb;
@@ -373,7 +488,7 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
     double _tc = eng_now();
     int ncv = clip_to_screen(sv, nsv, cv);
     g_perf_clip += eng_now() - _tc;
-    if (ncv < 3) { if (scissored) glDisable(GL_SCISSOR_TEST); return; }
+    if (ncv < 3) return;
 
     /* OVER-BRIGHTENING. The reference is out = clamp(c * bri / 64, 0, 255),
      * so bri > 64 makes a texel BRIGHTER than itself. Plain GL_MODULATE
@@ -399,9 +514,9 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
     double _tg = eng_now();
     /* 1.0 = every quad, as before; with write_prio_alpha, the prioverchar bit */
     const float prio_a = !cfg->write_prio_alpha ? 1.0f : ((q->cmode & 7) == 1 ? 1.0f : 0.0f);
+    const int base_alpha = !cfg->write_prio_alpha;      /* that mode writes the prio bit untested */
     if (solid) {
         int n = ncv > 32 ? 32 : ncv;
-        glDisable(GL_TEXTURE_2D);
         for (int i = 0; i < n; i++) {
             float k = solid_noshade ? 1.0f : cv[i].bri;
             float cr = solid_rgb[0] * k, cg = solid_rgb[1] * k, cb = solid_rgb[2] * k;
@@ -410,18 +525,10 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
             qa_rgba[i*4+2] = cb; qa_rgba[i*4+3] = prio_a;
             qa_xy[i*2+0] = cv[i].x; qa_xy[i*2+1] = cv[i].y;
         }
-        if (cfg->write_prio_alpha) glDisable(GL_ALPHA_TEST);
-        glDrawArrays(GL_POLYGON, 0, n);
-        if (cfg->write_prio_alpha) glEnable(GL_ALPHA_TEST);
+        bb_emit(n, &(struct bbstate){ .tex_on = 0, .alpha = base_alpha, .blend = 0, .prio = 0,
+                                      .sc_on = scissored, .sc = { scbox[0], scbox[1], scbox[2], scbox[3] } });
         rgb_scale = 1;
     } else {
-    glEnable(GL_TEXTURE_2D);
-    glBindTexture(GL_TEXTURE_2D, tex);
-    if (rgb_scale != 1) {
-        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
-        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
-        glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, (float)rgb_scale);
-    }
     {
         float inv = 1.0f / (float)rgb_scale;
         int n = ncv > 32 ? 32 : ncv;
@@ -434,13 +541,10 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
             qa_st[i*4+2] = 0.0f;   qa_st[i*4+3] = cv[i].w;
             qa_xy[i*2+0] = cv[i].x; qa_xy[i*2+1] = cv[i].y;
         }
-        if (cfg->write_prio_alpha) glDisable(GL_ALPHA_TEST);
-        glDrawArrays(GL_POLYGON, 0, n);
-        if (cfg->write_prio_alpha) glEnable(GL_ALPHA_TEST);
+        bb_emit(n, &(struct bbstate){ .tex = tex, .env = rgb_scale, .alpha = base_alpha, .blend = 0, .prio = 0,
+                                      .tex_on = 1, .sc_on = scissored, .sc = { scbox[0], scbox[1], scbox[2], scbox[3] },
+                                      .ou = bou, .ov = bov });
     }
-    if (rgb_scale != 1)      /* restore, or every later quad inherits the scale */
-        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
-    glDisable(GL_TEXTURE_2D);
     }
     g_perf_gl += eng_now() - _tg;
 
@@ -479,10 +583,6 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
                  * so leaving it enabled DISCARDS almost every fog fragment --
                  * the stage ran, the census counted it, and the framebuffer
                  * came out byte-identical. Turn it off for this pass. */
-                glDisable(GL_ALPHA_TEST);
-                glEnable(GL_BLEND);
-                glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-                if (cfg->write_prio_alpha) glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_FALSE);
                 { int n = ncv > 32 ? 32 : ncv;
                   for (int i = 0; i < n; i++) {
                     int32_t zz = (cv[i].w > 0.0f) ? (int32_t)(1.0f / cv[i].w) : 1;
@@ -497,16 +597,13 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
                     qa_rgba[i*4+2] = fb * k; qa_rgba[i*4+3] = (255 - a) / 255.0f;
                     qa_xy[i*2+0] = cv[i].x; qa_xy[i*2+1] = cv[i].y;
                   }
-                  /* texturing is OFF for this pass, so the texcoord array is
-                   * not sampled; leave it pointing at the previous quad's. */
-                  glDrawArrays(GL_POLYGON, 0, n); }
-                if (cfg->write_prio_alpha) glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-                glDisable(GL_BLEND);
-                glEnable(GL_ALPHA_TEST);
+                  /* texturing is OFF for this pass: texcoords are not sampled */
+                  bb_emit(n, &(struct bbstate){ .tex_on = 0, .alpha = 0, .blend = 1,
+                                                .prio = cfg->write_prio_alpha ? 1 : 0,
+                                                .sc_on = scissored, .sc = { scbox[0], scbox[1], scbox[2], scbox[3] } }); }
             }
         }
     }
-    if (scissored) glDisable(GL_SCISSOR_TEST);
 }
 
 

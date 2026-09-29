@@ -12,11 +12,17 @@ uint8_t texture_pen_lookup(int u, int v, int texbank);
 
 /* Bake or fetch a cached GL texture for one quad's UV bounding box.
  * texbank: 0-15 (V word bits [15:12]); pal_group: 0-127; cmode: 0-15 (U word
- * bits [15:12]). *out_su / *out_sv: the used fraction of the allocation, by
- * which the caller scales its texture coordinates. */
+ * bits [15:12]). *out_su / *out_sv: the texcoord scale; *out_ou / *out_ov: the
+ * texcoord origin (0 with per-quad textures; the slot position in the atlas
+ * otherwise, PROPCYCL_TEXATLAS=0 disables). texcoord = o + t * scale. */
 GLuint bake_quad_texture(int min_u, int min_v, int range_u, int range_v,
                          int texbank, int pal_group, int cmode,
-                         float *out_su, float *out_sv);
+                         float *out_su, float *out_sv, float *out_ou, float *out_ov);
+
+/* The atlas (engine/tex_bake.c) calls this before overwriting page pixels, so a
+ * renderer with buffered quads (engine/quad_gl.c's batch) draws them first. */
+void tex_bake_set_flush_hook(void (*f)(void));
+int  tex_bake_atlas_active(void);
 
 extern int    g_tex_opaque;       /* 1 = no pen-0 keying (hardware polygon path) */
 extern int    g_tex_bake_cap_req; /* the quad's on-screen extent, window pixels */
