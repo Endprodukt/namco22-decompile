@@ -23,6 +23,7 @@ GLuint bake_quad_texture(int min_u, int min_v, int range_u, int range_v,
  * renderer with buffered quads (engine/quad_gl.c's batch) draws them first. */
 void tex_bake_set_flush_hook(void (*f)(void));
 int  tex_bake_atlas_active(void);
+void tex_bake_commit(GLuint tex);   /* upload tex's atlas page if bakes dirtied it since its last use */
 
 extern int    g_tex_opaque;       /* 1 = no pen-0 keying (hardware polygon path) */
 extern int    g_tex_bake_cap_req; /* the quad's on-screen extent, window pixels */

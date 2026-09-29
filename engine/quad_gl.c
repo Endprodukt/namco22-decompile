@@ -212,6 +212,7 @@ static struct bbstate { GLuint tex; int env, alpha, blend, prio, tex_on, sc_on; 
 static void bb_flush(void)
 {
     if (!bb_n) return;
+    if (bb_run.tex_on) tex_bake_commit(bb_run.tex);   /* the page's dirty bands upload once, here, not per bake */
     glDrawArrays(GL_TRIANGLES, 0, bb_n);
     bb_n = 0;
 }

@@ -295,6 +295,8 @@ typedef struct {
     GLuint tex;
     int cx, cy, row_h;                         /* shelf cursor */
     arect fr[512]; int nfr;                    /* evicted rectangles */
+    uint8_t *shadow;                           /* the page's pixels, CPU side */
+    int dirty_y0, dirty_y1;                    /* shadow rows not yet uploaded ([y0, y1)) */
 } apage;
 static apage apages[ATLAS_MAXP];
 static int  ap_n, ap_reset_hand;
@@ -309,6 +311,26 @@ static int atlas_on(void)
 }
 int tex_bake_atlas_active(void) { return atlas_on(); }
 
+/* Bakes write the page's SHADOW (CPU memory); the GL texture is refreshed in whole
+ * dirty ROW BANDS, once, when a drawn quad actually needs the page
+ * (tex_bake_commit). A scene change's hundreds of bakes become a handful of
+ * uploads -- per-call, a glTexSubImage2D costs ~18 us on a Mesa/i965 mobile
+ * driver, and 1700 of them were the 30 ms frame at Dirt Dash's race start. */
+void tex_bake_commit(GLuint tex)               /* upload tex's page if bakes dirtied it */
+{
+    for (int i = 0; i < ap_n; i++) {
+        apage *p = &apages[i];
+        if (p->tex != tex || p->dirty_y0 >= p->dirty_y1) continue;
+        glBindTexture(GL_TEXTURE_2D, tex);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, ATLAS_DIM);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, p->dirty_y0, ATLAS_DIM, p->dirty_y1 - p->dirty_y0,
+                        GL_RGBA, GL_UNSIGNED_BYTE, p->shadow + (size_t)p->dirty_y0 * ATLAS_DIM * 4);
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        p->dirty_y0 = ATLAS_DIM; p->dirty_y1 = 0;
+        return;
+    }
+}
+
 static void atlas_page_init(int i)
 {
     glGenTextures(1, &apages[i].tex);
@@ -318,6 +340,9 @@ static void atlas_page_init(int i)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ATLAS_DIM, ATLAS_DIM, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    apages[i].shadow = malloc((size_t)ATLAS_DIM * ATLAS_DIM * 4);
+    if (!apages[i].shadow) fprintf(stderr, "[TEX] atlas shadow: out of memory\n");
+    apages[i].dirty_y0 = ATLAS_DIM; apages[i].dirty_y1 = 0;   /* empty band */
     apages[i].cx = apages[i].cy = apages[i].row_h = 0;
     apages[i].nfr = 0;
 }
@@ -455,6 +480,7 @@ static void atlas_page_reset(int p)
     }
     apages[p].cx = apages[p].cy = apages[p].row_h = 0;
     apages[p].nfr = 0;
+    apages[p].dirty_y0 = ATLAS_DIM; apages[p].dirty_y1 = 0;
 }
 
 /* Static pixel buffer for baking (TEX_BAKE_MAX^2 RGBA, reused each bake) */
@@ -473,7 +499,7 @@ static GLuint gen_texture(void)
 
 void renderer_texture_init(void) {
     if (gen_n) { glDeleteTextures(gen_n, gen_pool); gen_n = 0; }
-    for (int i = 0; i < ap_n; i++) glDeleteTextures(1, &apages[i].tex);
+    for (int i = 0; i < ap_n; i++) { glDeleteTextures(1, &apages[i].tex); free(apages[i].shadow); apages[i].shadow = NULL; }
     ap_n = 0; ap_reset_hand = 0;
     /* Delete any live textures rather than just dropping the entries --
      * calling this a second time would otherwise orphan every texture the
@@ -519,6 +545,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
                         float *out_su, float *out_sv, float *out_ou, float *out_ov,
                         int force_cap,      /* > 0: at most this cap (a coarse placeholder) */
                         int peek)           /* 1: only look in the cache -- 0 on a miss, nothing baked, no miss counted */ {
+    int slot_page = 0, slot_x = 0, slot_y = 0;   /* atlas: the slot this bake lands in (set before the bake loop) */
     /* Expand degenerate UV ranges to minimum 16 texels */
     if (range_u < 16) { min_u = (min_u * 2 + range_u) / 2 - 8; range_u = 16; }
     if (range_v < 16) { min_v = (min_v * 2 + range_v) / 2 - 8; range_v = 16; }
@@ -763,6 +790,20 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     }
 
     const uint8_t *tmap = g_texture_tilemap, *tdata = g_texture_data;
+    uint8_t *bake_dst = tex_pixel_buf; long bake_stride = (long)bw * 4;
+    if (atlas_on()) {
+        /* allocate the slot and bake STRAIGHT into the page's shadow; the GL
+         * texture is refreshed in row bands when a drawn quad needs the page */
+        atlas_alloc(bw, bh, &slot_page, &slot_x, &slot_y);   /* never fails: a full atlas resets a page */
+        if (atlas_flush_hook) atlas_flush_hook();            /* buffered quads hold texcoords into the pages: draw them before the bytes change */
+        apage *ap = &apages[slot_page];
+        if (ap->shadow) {
+            bake_dst = ap->shadow + ((size_t)slot_y * ATLAS_DIM + slot_x) * 4;
+            bake_stride = (long)ATLAS_DIM * 4;
+            if (slot_y < ap->dirty_y0) ap->dirty_y0 = slot_y;
+            if (slot_y + bh > ap->dirty_y1) ap->dirty_y1 = slot_y + bh;
+        }
+    }
     for (int py = 0; py < bh; py++) {
         int tv = g_tex_pow2sample ? min_v + py * range_v / sh
                                   : min_v + py * step_v;
@@ -770,7 +811,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
         int v  = (tv & 0xFFF) | (texbank * 0x1000);
         int vrow = (v & 0xFFF0) << 4;            /* tilemap row base */
         int local_y0 = v & 0xF;
-        uint8_t *dst = &tex_pixel_buf[(size_t)py * bw * 4];
+        uint8_t *dst = bake_dst + (size_t)py * bake_stride;
         int last_idx = -1; uint32_t tile = 0; int attr = 0;
         for (int px = 0; px < bw; px++) {
             uint8_t fetch = 0;
@@ -815,7 +856,6 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     /* Find the slot first so an eviction can donate its texture object (per-quad
      * path) or free its atlas rect. */
     GLuint tex = 0;
-    int slot_page = 0, slot_x = 0, slot_y = 0;
     TexCacheEntry *slotp = NULL;
     for (int probe = 0; probe < TEX_CACHE_PROBES; probe++) {
         TexCacheEntry *e = &tex_cache[(h + probe) & TEX_CACHE_MASK];
@@ -831,25 +871,18 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
         slotp->occupied = 0;
     }
     if (atlas_on()) {
-        /* Pages are preallocated; a bake is a slot alloc + glTexSubImage2D.
-         * The slot always has room for the guard texel, so bw/bh are the bake
-         * size outright (the pow2-exact clamp case never happens). */
-        int pg = 0, ax = 0, ay = 0;
-        atlas_alloc(bw, bh, &pg, &ax, &ay);          /* never fails: a full atlas resets a page */
-        if (atlas_flush_hook) atlas_flush_hook();    /* buffered quads hold texcoords into the pages: draw them before the bytes change */
-        glBindTexture(GL_TEXTURE_2D, apages[pg].tex);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, ax, ay, bw, bh, GL_RGBA, GL_UNSIGNED_BYTE, tex_pixel_buf);
+        /* the bake already wrote the page's shadow (above); the GL texture
+         * catches up at tex_bake_commit, one dirty row band per demand */
         tex_subimages++;
-        tex = apages[pg].tex;
-        slot_page = pg; slot_x = ax; slot_y = ay;
+        tex = apages[slot_page].tex;
         /* texel d/step of the bake sits at slot texel d/step: normalized, that
          * is ou + ((u-bmin)+cu)/brange * range/(step*DIM) */
         su = (float)range_u / (float)(step_u * ATLAS_DIM);
         sv = (float)range_v / (float)(step_v * ATLAS_DIM);
         if (out_su) *out_su = su;
         if (out_sv) *out_sv = sv;
-        if (out_ou) *out_ou = (float)ax / ATLAS_DIM;
-        if (out_ov) *out_ov = (float)ay / ATLAS_DIM;
+        if (out_ou) *out_ou = (float)slot_x / ATLAS_DIM;
+        if (out_ov) *out_ov = (float)slot_y / ATLAS_DIM;
     } else {
     int had_w = slotp->alloc_w, had_h = slotp->alloc_h;
     if (!tex) {
