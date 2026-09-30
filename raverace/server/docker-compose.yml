@@ -1,0 +1,14 @@
+# One command:   docker compose up -d --build
+# Host networking keeps every player's real address (the per-IP limit needs it) and lets LAN discovery work.
+# Open UDP 27750 (or RRN1_PORT) in the machine's firewall. Linux only.
+services:
+  rrn1:
+    build: .
+    container_name: rrn1
+    restart: unless-stopped
+    init: true                                     # PID 1 ignores SIGTERM without one: a clean `docker compose down`
+    network_mode: host
+    environment:
+      RRN1_PORT: ${RRN1_PORT:-27750}
+      RRN1_NAME: ${RRN1_NAME:-Rave Racer}        # 16 bytes at most, shown in the LAN game list
+      RRN1_MAX_PER_IP: ${RRN1_MAX_PER_IP:-4}

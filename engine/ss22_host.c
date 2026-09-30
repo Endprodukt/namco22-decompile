@@ -131,7 +131,12 @@ static void present(void)
     int rw, rh, vw, vh;
     eng_disp_render_size(&rw, &rh);
     rt_begin(win, rw, rh, &vw, &vh);
+    struct timespec d0, d1; clock_gettime(CLOCK_MONOTONIC, &d0);
     ss22_draw(vw, vh);
+    clock_gettime(CLOCK_MONOTONIC, &d1);
+    { static int on = -1; if (on < 0) on = getenv("ENG_FTIME") != NULL;
+      double ms = (d1.tv_sec - d0.tv_sec) * 1e3 + (d1.tv_nsec - d0.tv_nsec) * 1e-6;
+      if (on && ms > 40.0) fprintf(stderr, "[FTIME-DRAW] ss22_draw %.1f ms\n", ms); }   /* the engine's draw (quads, sprites, text, post) vs the swap below */
     if (shot_pending) {                              /* F12: what the engine drew, before it is scaled to the window */
         shot_pending = false;
         char p[96]; time_t t = time(NULL); struct tm tm; localtime_r(&t, &tm); static int n;
@@ -230,10 +235,20 @@ bool ss22_host_frame(void)
             SDL_PushEvent(&ke);
         } } }
     static eng_pace pl;
+    static int ftm = -1; if (ftm < 0) ftm = getenv("ENG_FTIME") != NULL;
+    struct timespec a0, a1, a2, a3; if (ftm) clock_gettime(CLOCK_MONOTONIC, &a0);
     if (!pump()) return false;
     if (!paused && !eng_ui_is_open()) game->input_update();
+    if (ftm) clock_gettime(CLOCK_MONOTONIC, &a1);
     present_with(&pl);
+    if (ftm) clock_gettime(CLOCK_MONOTONIC, &a2);
     pace();
+    if (ftm) {                                       /* which part of a slow host frame: events / draw+swap / pacing wait */
+        clock_gettime(CLOCK_MONOTONIC, &a3);
+        double ev = (a1.tv_sec - a0.tv_sec) * 1e3 + (a1.tv_nsec - a0.tv_nsec) * 1e-6, pr = (a2.tv_sec - a1.tv_sec) * 1e3 + (a2.tv_nsec - a1.tv_nsec) * 1e-6,
+               pc = (a3.tv_sec - a2.tv_sec) * 1e3 + (a3.tv_nsec - a2.tv_nsec) * 1e-6;
+        if (ev + pr + pc > 40.0) fprintf(stderr, "[FTIME-HOST] events %.1f  present %.1f  pace %.1f ms\n", ev, pr, pc);
+    }
     eng_pace_after(&pl, game->tag);
     while (paused || eng_ui_is_open()) {             /* the game stops (P, or the menu); the window keeps answering */
         eng_pace_reset(&pl);

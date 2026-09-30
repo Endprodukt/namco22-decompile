@@ -67,6 +67,7 @@ set(NAMCO22_C25_ORACLE_SRC ${NAMCO22_TOOLS_DIR}/c25oracle/c25_interp.c)
 # trace hook); the memory map, devices and scheduler stay with each game
 set(NAMCO22_ENGINE_LIFT_SRC
     ${NAMCO22_ENGINE_DIR}/lift_cpu.c
+    ${NAMCO22_ENGINE_DIR}/lift_env.c
 )
 set(NAMCO22_ENGINE_SND_SRC
     ${NAMCO22_ENGINE_DIR}/c352.c

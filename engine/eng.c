@@ -38,7 +38,7 @@ int eng_load_texture_roms(const char *dir, const char *const cg[8],
     if (!g_texture_data || !g_texture_tilemap) return 0;
     int ok = 1;
     for (int i = 0; i < 8; i++)
-        ok = ok && load_at(dir, cg[i], g_texture_data + (size_t)i * 0x200000, 0x200000);
+        ok = ok && (!cg[i] || load_at(dir, cg[i], g_texture_data + (size_t)i * 0x200000, 0x200000));
     ok = ok && load_at(dir, ccrl, g_texture_tilemap, 0x200000);
     ok = ok && load_at(dir, ccrh, g_texture_tilemap + 0x200000, 0x80000);
     return ok;

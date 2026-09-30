@@ -72,6 +72,7 @@
     GLF(glTexCoordPointer) \
     GLF(glTexEnvf) \
     GLF(glTexEnvi) \
+    GLF(glTexEnvfv) \
     GLF(glTexImage2D) \
     GLF(glTexParameteri) \
     GLF(glTexSubImage2D) \

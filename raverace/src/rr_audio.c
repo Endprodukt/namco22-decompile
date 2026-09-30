@@ -15,6 +15,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "rr_game.h"
 #include "c352.h"
 #include "rr_sound.h"
 #include <SDL.h>
@@ -149,12 +150,10 @@ static void wav_header(FILE *f, uint32_t frames)
 
 bool rr_audio_init(const char *dir)
 {
-    static const struct { const char *n; uint32_t at; } w[4] = {
-        { "rv1wav0.10r", 0x000000 }, { "rv1wav2.10n", 0x100000 },
-        { "rv1wav1.10p", 0x200000 }, { "rv1wav3.10l", 0x300000 } };
+    const rr_wave_t *w = g_rr_game->wav;
     wave = calloc(1, 0x400000);
     for (int i = 0; i < 4; i++) {
-        char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, w[i].n);
+        char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, w[i].file);
         FILE *f = fopen(p, "rb");
         if (!f || fread(wave + w[i].at, 1, 0x100000, f) != 0x100000) {
             fprintf(stderr, "[AUDIO] cannot read %s -- silent\n", p);

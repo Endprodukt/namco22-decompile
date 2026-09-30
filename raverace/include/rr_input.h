@@ -15,6 +15,7 @@ extern int g_steer_speed, g_steer_return, g_pad_deadzone, g_cfg_freeplay;
 extern int g_cfg_ffb_strength, g_cfg_ffb_invert;
 extern int g_cfg_fullscreen, g_cfg_scale, g_cfg_scaling, g_cfg_volume;
 extern int g_cfg_winmode, g_cfg_res_w, g_cfg_res_h, g_cfg_wide, g_cfg_aspect, g_cfg_draw;
+extern char g_cfg_net_server[128], g_cfg_net_name[24];   /* the Online page's server and lobby name */
 bool rr_input_set_option(const char *path, const char *key, const char *val);
 const char *rr_input_action_name(int a);
 void rr_input_bind_key(int a, SDL_Scancode sc);

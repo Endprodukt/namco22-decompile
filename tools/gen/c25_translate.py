@@ -31,7 +31,7 @@ translation TRAPS LOUDLY (the master stops and says where) -- never skipped.
 import argparse, os, re, sys
 
 ap = argparse.ArgumentParser()
-ap.add_argument('--game', required=True, choices=['pc', 'rr', 'tw', 'dd'])
+ap.add_argument('--game', required=True, choices=['pc', 'rr', 'tw', 'dd', 'tc'])
 ap.add_argument('--roms', required=True)
 ap.add_argument('--cov', action='append', default=[])
 ap.add_argument('--out')
@@ -59,6 +59,12 @@ if a.game == 'dd':
     for i in range(0, len(hi), 2):
         rom[2 * i] = hi[i + 1]; rom[2 * i + 1] = hi[i]; rom[2 * i + 2] = lo[i + 1]; rom[2 * i + 3] = lo[i]
     main_block = 0x57F00
+elif a.game == 'tc':
+    # Time Crisis (Super System 22): the assembled 68K program (timecris/tools/setup_roms.py: four 1 MB chips ROM_LOAD32_BYTE). The upload routine
+    # (0xBBA3C..) copies the master program's block at 0xABA8C to polygon RAM 0xC00C00 before it writes 0xFF to syscon 0x1C; a second block at
+    # 0xBB616 follows the handshake (the slave's, as in Rave Racer / Ace Driver). --main-rom timecris_main.bin
+    rom = open(a.main_rom, 'rb').read() if a.main_rom else open(os.path.join(os.path.dirname(os.path.abspath(a.roms)), 'timecris_main.bin'), 'rb').read()
+    main_block = 0xABA8C
 elif a.game in ('pc', 'tw'):
     # Super System 22: <game>ver-a.1..4 byte-interleaved 4,3,2,1 (src/rom_loader.c; ROM_LOAD32_BYTE).
     #   Prop Cycle: pr2ver-a.*, the game program's count word at 0x43748 (src/master_dsp.c)

@@ -329,10 +329,10 @@ int snd_pan_to_speakers(m37710_t *c)
     op(c, 2); wr8(c, dp(c, V_PAN_TMP), pos);
     const uint8_t p = pos & 0x3F;                             /* AND #$3F */
     op(c, 2); op(c, 2); op(c, 1);                             /* AND, SEP #X, TAX */
-    op(c, 4); const uint8_t near = rd8(c, dbank(c, T_PAN_LAW + p));          /* LDB */
-    op(c, 3); wr8(c, dp(c, V_PAN_FOLD), near);                               /* STB */
+    op(c, 4); const uint8_t law_near = rd8(c, dbank(c, T_PAN_LAW + p));          /* LDB */
+    op(c, 3); wr8(c, dp(c, V_PAN_FOLD), law_near);                               /* STB */
     op(c, 2); op(c, 1);                                       /* EOR #$3F, TAX */
-    op(c, 3); const uint8_t far = rd8(c, dbank(c, T_PAN_LAW + (p ^ 0x3F)));
+    op(c, 3); const uint8_t law_far = rd8(c, dbank(c, T_PAN_LAW + (p ^ 0x3F)));
     op(c, 2); c->ps &= (uint16_t)~M377_X;                     /* CLP #X */
     op(c, 1); c->x = pop16(c);                                /* PLX */
     op(c, 2); (void)rd8(c, dp(c, V_PAN_TMP));                 /* ASL $C4 */
@@ -342,11 +342,11 @@ int snd_pan_to_speakers(m37710_t *c)
     op(c, 2); if (second_half) c->cycles += 2;                /* BMI */
     uint8_t shown;
     if (!second_half) {                                       /* front L/R pair */
-        op(c, 2); wr8(c, dp(c, V_SPEAKER_ATTEN + 0), far);
+        op(c, 2); wr8(c, dp(c, V_SPEAKER_ATTEN + 0), law_far);
         op(c, 2); shown = rd8(c, dp(c, V_PAN_FOLD));
         op(c, 2); wr8(c, dp(c, V_SPEAKER_ATTEN + 1), shown);
     } else {                                                  /* front L + rear L */
-        op(c, 2); wr8(c, dp(c, V_SPEAKER_ATTEN + 2), far);
+        op(c, 2); wr8(c, dp(c, V_SPEAKER_ATTEN + 2), law_far);
         op(c, 2); shown = rd8(c, dp(c, V_PAN_FOLD));
         op(c, 2); wr8(c, dp(c, V_SPEAKER_ATTEN + 0), shown);
     }
@@ -354,7 +354,7 @@ int snd_pan_to_speakers(m37710_t *c)
     /* exit state: 8-bit A and B hold the law values (high bytes kept),
      * DT 0, 16-bit X restored; C clear, V from the ADC, N/Z from the last LDA */
     c->a = (uint16_t)((c->a & 0xFF00) | shown);
-    c->b = (uint16_t)((c->b & 0xFF00) | near);
+    c->b = (uint16_t)((c->b & 0xFF00) | law_near);
     c->ps &= (uint16_t)~(M377_C | M377_V | M377_N | M377_Z);
     if (overflow)     c->ps |= M377_V;
     if (shown == 0)   c->ps |= M377_Z;

@@ -29,6 +29,7 @@
 #include "rr_font.h"
 #include "rr_sound.h"
 #include "rr_ui.h"
+#include "rr_net.h"
 #include "eng_pad.h"
 #include "eng_pace.h"
 #include "eng_ffb.h"
@@ -213,6 +214,9 @@ void rr_host_set_ffb_strength(int pct)
     char v[8]; snprintf(v, sizeof v, "%d", g_cfg_ffb_strength); save_opt("ffb_strength", v);
 }
 void rr_host_set_ffb_invert(bool on) { g_cfg_ffb_invert = on; save_opt("ffb_invert", on ? "1" : "0"); }
+/* the Online page: the address/name are saved and handed to the RRN1 client; connecting stays a menu action */
+void rr_host_set_net_server(const char *s) { snprintf(g_cfg_net_server, sizeof g_cfg_net_server, "%s", s); save_opt("net_server", g_cfg_net_server); rr_net_set_server(g_cfg_net_server); }
+void rr_host_set_net_name(const char *s) { snprintf(g_cfg_net_name, sizeof g_cfg_net_name, "%s", s); save_opt("net_name", g_cfg_net_name); rr_net_set_name(g_cfg_net_name); }
 void rr_host_toggle_record(void) { toggle_record(); }
 int  rr_host_res_count(void) { return NRES; }
 void rr_host_res_get(int i, int *w, int *h) { if (i < 0 || i >= NRES) i = 0; *w = res_list[i].w; *h = res_list[i].h; }

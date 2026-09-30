@@ -22,6 +22,7 @@
 #include <string.h>
 #include <SDL.h>
 #include "eng_gl.h"
+#include "rr_game.h"
 #include "eng.h"
 #include "geo_hw.h"
 #include "slave_list.h"
@@ -33,6 +34,7 @@
 #include "rr_dsp.h"
 #include "rr_scene.h"
 #include "rr_gl.h"
+#include "rr_game.h"
 
 #define NW 640
 #define NH 480
@@ -45,10 +47,8 @@ static int32_t pointram_read(uint32_t a) { return rr_dsp_pointram_read(a & 0xfff
 
 bool rr_gl_init(const char *dir)
 {
-    static const char *const cg[8] = { "rv1cg0.1a", "rv1cg1.1c", "rv1cg2.1d", "rv1cg3.1e",
-                                       "rv1cg4.1f", "rv1cg5.1j", "rv1cg6.1k", "rv1cg7.1n" };
-    if (!eng_load_texture_roms(dir, cg, "rv1ccrl.5a", "rv1ccrh.5c")) return false;
-    static const char *gp[3] = { "rr1gam.2d", "rr1gam.3d", "rr1gam.4d" };
+    if (!eng_load_texture_roms(dir, g_rr_game->cg, g_rr_game->ccrl, g_rr_game->ccrh)) return false;
+    const char *const *gp = g_rr_game->gamma;
     for (int i = 0; i < 3; i++) {
         char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, gp[i]);
         FILE *f = fopen(p, "rb");

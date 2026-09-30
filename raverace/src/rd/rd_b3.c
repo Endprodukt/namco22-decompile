@@ -600,7 +600,7 @@ __attribute__((unused)) static uint32_t rd_1eb66(void)
 {
     charge(3);                                          /* move.w, move.l, moveq */
     uint32_t best = 0x7FFFFFFF;
-    uint16_t near = 0xFFFF;
+    uint16_t nearest = 0xFFFF;
     set_d(6, best); set_d(5, 0xFFFFFFFFu);
     for (int car = 15; ; car--) {
         charge(3);                                      /* move.w, tst.w, beq */
@@ -621,7 +621,7 @@ __attribute__((unused)) static uint32_t rd_1eb66(void)
                 charge(3);                              /* add.l, cmp.l, bcc.w */
                 d1 += d2;
                 set_d(1, d1); set_d(2, d2);
-                if (d1 < best) { charge(2); best = d1; near = (uint16_t)car; set_d(6, best); set_d16(5, near); }
+                if (d1 < best) { charge(2); best = d1; nearest = (uint16_t)car; set_d(6, best); set_d16(5, nearest); }
             }
         }
         charge(1);                                      /* dbf */
@@ -635,7 +635,7 @@ __attribute__((unused)) static uint32_t rd_1eb66(void)
     vwr16(W(0x44C4), (uint16_t)best);
     charge(3);                                          /* move.w, tst.w, bmi.w */
     set_d16(0, 0xFF);
-    if (!(near & 0x8000)) {
+    if (!(nearest & 0x8000)) {
         charge(2);                                      /* cmpi.l, bcc.w */
         if (best < 0xE00) {
             charge(2);                                  /* lsr.w, bpl (always: N clear after lsr) */
@@ -645,7 +645,7 @@ __attribute__((unused)) static uint32_t rd_1eb66(void)
             set_d16(6, vol);
             charge(11);
             vwr16(0x60005140u, vol);
-            uint16_t off = (uint16_t)(near << 6);
+            uint16_t off = (uint16_t)(nearest << 6);
             set_d16(5, off);
             uint16_t d1 = (uint16_t)((uint16_t)(0 - vrd16(W(0x44C6))) << 4);
             set_d16(1, d1);

@@ -116,7 +116,7 @@ x86_64-w64-mingw32-strip "$REL/PropCycle.exe" "$REL/RaveRacer.exe" "$REL/TokyoWa
 # (OPENGL32.dll does -- it hands over to the installed GPU driver and is never bundled)
 for exe in PropCycle.exe RaveRacer.exe TokyoWars.exe DirtDash.exe; do
     bad=$(x86_64-w64-mingw32-objdump -p "$REL/$exe" | awk '/DLL Name/ {print $3}' |
-          grep -viE '^(kernel32|user32|gdi32|opengl32|advapi32|shell32|ole32|oleaut32|imm32|setupapi|version|winmm|dinput8|api-ms-win-crt-.*)\.dll$' || true)
+          grep -viE '^(kernel32|user32|gdi32|opengl32|advapi32|shell32|ole32|oleaut32|imm32|setupapi|version|winmm|dinput8|ws2_32|api-ms-win-crt-.*)\.dll$' || true)
     [ -z "$bad" ] || { echo "$exe needs DLLs Windows does not ship: $bad"; exit 1; }
 done
 (cd "$TOP" && python3 -c "import shutil; shutil.make_archive('windows-release', 'zip', '.', 'windows-release')")

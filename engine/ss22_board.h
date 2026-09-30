@@ -71,7 +71,14 @@ typedef struct {
     uint32_t keycus_unit, keycus_value;               /* the protection chip's one answer: a read of this 16-bit unit returns the value */
     bool (*load_program)(const char *rom_dir);        /* the 68K's image into g_ss22.rom (the chips' layout is the game's) */
     bool (*load_eeprom)(const char *rom_dir);         /* the EEPROM's starting contents (the set's defaults, or blank) */
+    bool (*extra_read)(uint32_t a, int size, uint32_t *v);   /* optional: a device on the map only this game has, asked first for every read in 0x430000..0x43FFFF (a light gun) */
 } ss22_board_cfg;
+
+/* THE LIGHT GUN (MAME gun_r): 16-bit reads on the HIGH half of each long at 0x430000 (X), 0x430004 and 0x430008 (Y, twice); both axes read 0 when
+ * the crosshair is on a screen edge = off-screen. The port ranges are the cabinet's: X 68..694, Y 43..284 (tuned for a CRT). The host sets these from its pointer. */
+extern uint16_t g_ss22_gun_x, g_ss22_gun_y;
+extern bool     g_ss22_gun_off;
+bool ss22_gun_read(uint32_t a, int size, uint32_t *v);
 
 void ss22_board_use(const ss22_board_cfg *cfg);     /* first: which game this is */
 bool ss22_load_program(const char *rom_dir);

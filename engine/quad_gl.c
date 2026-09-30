@@ -12,11 +12,35 @@
 #include <math.h>
 #include <stdbool.h>
 #include <time.h>
+#include <SDL2/SDL.h>           /* SDL_GL_GetProcAddress: glActiveTexture (GL 1.3) */
 #include "eng_gl.h"
 #include "eng.h"
 #include "geo_hw.h"
 #include "tex_bake.h"
 #include "quad_gl.h"
+
+/* glActiveTexture, resolved at run time (the Windows build does not link
+ * opengl32, and GL 1.3 entry points need a lookup there anyway). NULL = no
+ * multitexture: the fog stays a second pass. ENG_FOG2PASS=1 forces that. */
+static void (APIENTRY *p_active_texture)(GLenum);
+static int mt_state = -1;                           /* -1 untried, 0 unavailable, 1 usable */
+static GLuint mt_dummy_tex;                         /* unit 1's binding (its combiner never samples it) */
+static void mt_resolve(void)
+{
+    if (mt_state >= 0) return;
+    p_active_texture = (void (APIENTRY *)(GLenum))SDL_GL_GetProcAddress("glActiveTexture");
+    const char *e = getenv("ENG_FOG2PASS");
+    mt_state = (p_active_texture && !(e && *e == '1')) ? 1 : 0;
+    if (!mt_state) return;
+    p_active_texture(GL_TEXTURE1);
+    glGenTextures(1, &mt_dummy_tex);
+    glBindTexture(GL_TEXTURE_2D, mt_dummy_tex);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    const uint32_t white = 0xFFFFFFFF;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, &white);
+    p_active_texture(GL_TEXTURE0);
+}
 
 float  g_scene_x0 = 0.0f, g_scene_x1 = (float)ENG_SCREEN_W;
 int  (*g_eng_quad_dx)(const geo_quad *q);
@@ -29,10 +53,11 @@ int    g_eng_degen_uv_legacy = 0;
 /* tracked GL state for the quad pass: valid only between eng_draw_begin/resume and
  * eng_draw_end -- the sprite/text/post passes change state behind us, so resume
  * marks it all unknown and the next quad re-issues what it needs. */
-static struct { int valid, tex_on, alpha_on, blend_on, env_scale, prio_mask; GLuint tex; } qs;
-static void qs_reset(void) { qs.valid = 0; qs.env_scale = -1; }
+static struct { int valid, tex_on, alpha_on, blend_on, env_scale, prio_mask, fog; GLuint tex; float frgb[3]; } qs;
+long g_bb_draws, g_bb_binds;                     /* per-run GL calls, for the FTIME line */
+static void qs_reset(void) { qs.valid = 0; qs.env_scale = -1; }   /* qs.fog stays truthful: unit 1 may really be on */
 static void qs_tex_on(int on) { if (!qs.valid || qs.tex_on != on) { if (on) glEnable(GL_TEXTURE_2D); else glDisable(GL_TEXTURE_2D); qs.tex_on = on; } }
-static void qs_bind(GLuint t) { if (!qs.valid || qs.tex != t) { glBindTexture(GL_TEXTURE_2D, t); qs.tex = t; } }
+static void qs_bind(GLuint t) { if (!qs.valid || qs.tex != t) { glBindTexture(GL_TEXTURE_2D, t); qs.tex = t; g_bb_binds++; } }
 static void qs_alpha(int on) { if (!qs.valid || qs.alpha_on != on) { if (on) glEnable(GL_ALPHA_TEST); else glDisable(GL_ALPHA_TEST); qs.alpha_on = on; } }
 static void qs_blend(int on) { if (!qs.valid || qs.blend_on != on) { if (on) { glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA); } else glDisable(GL_BLEND); qs.blend_on = on; } }
 static void qs_prio_mask(int off) { if (!qs.valid || qs.prio_mask != off) { glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, off ? GL_FALSE : GL_TRUE); qs.prio_mask = off; } }
@@ -57,6 +82,108 @@ static void qs_env(int scale)
         glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, (float)scale);
     }
     qs.env_scale = scale;
+}
+
+/* ---- single-pass fog (GL 1.3 combiners, two texture units) ---------------
+ * The reference chain is per pixel: fog factor f from the CZ table, fog colour
+ * F, vertex shade s, texel t:
+ *     Super 22 (fog AFTER shade):  out = t*s*(1-f) + F*f
+ *     System 22 (fog BEFORE shade): out = (t*(1-f) + F*f) * s
+ * Both are one GL_INTERPOLATE with the fog factor in the vertex ALPHA and F in
+ * the unit's constant colour; the shade is a MODULATE by the vertex colour
+ * with GL_RGB_SCALE headroom, on unit 1 for System 22 (shade after the fog
+ * interpolation) and on unit 0 for Super 22 (shade first, fog interpolates
+ * the result toward F). The two-pass blend needed a flush per fogged quad
+ * (~1,300 state breaks a frame in Dirt Dash's city); this keeps fogged quads
+ * in the batch. Vertex alpha no longer carries prio here -- single-pass is
+ * textured quads only, and only when write_prio_alpha is off. */
+static void qs_fog(int mode, const float *frgb, int scale)
+{
+    /* mode 0: no fog -- unit 1 off, unit 0 as before */
+    if (!mode) {
+        if (qs.fog) {   /* leaving fog: unit 1 off, unit 0 rebuilt by qs_env below */
+            p_active_texture(GL_TEXTURE1);
+            glDisable(GL_TEXTURE_2D);
+            glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+            p_active_texture(GL_TEXTURE0);
+            if (qs.fog == 1) {  /* unit 0 was INTERPOLATE with a CONSTANT source: restore MODULATE's */
+                glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+                glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_PRIMARY_COLOR);
+                glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR);
+                glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, GL_SRC_COLOR);
+            }
+            /* both modes made unit 0's alpha REPLACE(texture) */
+            glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_TEXTURE);
+            glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA, GL_PRIMARY_COLOR);
+            qs.env_scale = -1;
+            qs.fog = 0;
+        }
+        qs_env(scale);
+        return;
+    }
+    if (qs.valid && qs.fog == mode && !memcmp(qs.frgb, frgb, 12)) {
+        if (mode == 2) qs_env(scale);   /* unit 0's shade scale may differ for the same fog colour */
+        return;
+    }
+    if (qs.fog && qs.fog != mode) {     /* switching fog modes: rebuild from the unfogged state */
+        int save = qs.valid;
+        qs_fog(0, frgb, scale);
+        qs.valid = save;
+    }
+    if (mode == 2) {            /* Super 22: shade on unit 0, fog interpolate on unit 1 */
+        qs_env(scale);
+        /* vertex alpha now carries the fog FACTOR, not transparency: unit 0's
+         * alpha must come from the texture alone or the alpha test would
+         * discard heavily fogged pixels (a fully fogged sky drew black) */
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_TEXTURE);
+        p_active_texture(GL_TEXTURE1);
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, mt_dummy_tex);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PREVIOUS);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_CONSTANT);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, GL_SRC_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB, GL_PRIMARY_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_PREVIOUS);
+        glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 1.0f);
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, frgb);
+        p_active_texture(GL_TEXTURE0);
+    } else {                    /* System 22: fog interpolate on unit 0, shade on unit 1 */
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_INTERPOLATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_TEXTURE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_CONSTANT);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, GL_SRC_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE2_RGB, GL_PRIMARY_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND2_RGB, GL_SRC_ALPHA);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_TEXTURE);
+        glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 1.0f);
+        glTexEnvfv(GL_TEXTURE_ENV, GL_TEXTURE_ENV_COLOR, frgb);
+        p_active_texture(GL_TEXTURE1);
+        glEnable(GL_TEXTURE_2D);
+        glBindTexture(GL_TEXTURE_2D, mt_dummy_tex);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_COMBINE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_RGB, GL_MODULATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_RGB, GL_PREVIOUS);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND0_RGB, GL_SRC_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_RGB, GL_PRIMARY_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_OPERAND1_RGB, GL_SRC_COLOR);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_REPLACE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_PREVIOUS);
+        glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, (float)scale);
+        p_active_texture(GL_TEXTURE0);
+        qs.env_scale = -1;      /* unit 0 is INTERPOLATE now: a later unfogged quad re-applies */
+    }
+    qs.fog = mode;
+    memcpy(qs.frgb, frgb, 12);
 }
 
 /* Perf timers are gated: a frame makes thousands of these calls (Prop Cycle
@@ -207,13 +334,18 @@ static float qa_xy[32 * 2], qa_rgba[32 * 4], qa_st[32 * 4];
 #define BB_MAXV 60000
 static float bb_xy[BB_MAXV * 2], bb_rgba[BB_MAXV * 4], bb_st[BB_MAXV * 4];
 static int bb_n, bb_valid;
-static struct bbstate { GLuint tex; int env, alpha, blend, prio, tex_on, sc_on; int sc[4]; float ou, ov; } bb_run;
+static struct bbstate { GLuint tex; int env, alpha, blend, prio, tex_on, sc_on, fog; int sc[4]; float frgb[3]; } bb_run;
 
 static void bb_flush(void)
 {
     if (!bb_n) return;
-    if (bb_run.tex_on) tex_bake_commit(bb_run.tex);   /* the page's dirty bands upload once, here, not per bake */
+    /* re-bind the run's page OURSELVES: tex_bake's atlas_page_init (a cold bake
+     * creating a page, e.g. from a quad that then clips away) binds the new page
+     * behind our back, and commit() below binds only when the page is dirty --
+     * a clean page would draw against whatever texture was last bound */
+    if (bb_run.tex_on) { qs_bind(bb_run.tex); tex_bake_commit(bb_run.tex); }   /* the page's dirty bands upload once, here, not per bake */
     glDrawArrays(GL_TRIANGLES, 0, bb_n);
+    g_bb_draws++;
     bb_n = 0;
 }
 
@@ -221,15 +353,17 @@ static void bb_apply(const struct bbstate *st)
 {
     qs_tex_on(st->tex_on);
     if (st->tex_on) {
-        qs_bind(st->tex); qs_env(st->env);
-        /* the atlas slot origin goes through the TEXTURE MATRIX: adding it to s,t
-         * per vertex rounds differently and measurably shifts texels under
-         * magnification (the Tokyo Wars gate catches it); (s,t,r,q) x
-         * translate(ou,ov) divides to ou + s/q -- the slot origin, exactly. */
-        glMatrixMode(GL_TEXTURE);
-        glLoadIdentity();
-        if (st->ou != 0.0f || st->ov != 0.0f) glTranslatef(st->ou, st->ov, 0.0f);
-        glMatrixMode(GL_MODELVIEW);
+        qs_bind(st->tex);
+        /* the atlas slot origin is folded into s,t per vertex (s + ou*q at the
+         * qa_st fill in draw_quad_one), NOT the texture matrix: with the matrix
+         * the slot origin was part of this run state and broke the batch on
+         * nearly every quad -- ~3,600 draws and ~6,900 matrix calls a frame in
+         * Dirt Dash's city, 12+ ms of driver overhead on an i5-6260U.
+         * (s,t,r,q) x translate(ou,ov) divides to ou + s/q either way. */
+        if (mt_state == 1) qs_fog(st->fog, st->frgb, st->env);
+        else qs_env(st->env);
+    } else if (qs.fog) {
+        qs_fog(0, st->frgb, 0);             /* leaving fog for a flat pass: unit 1 off */
     }
     qs_alpha(st->alpha);
     qs_blend(st->blend);
@@ -237,18 +371,50 @@ static void bb_apply(const struct bbstate *st)
     qs_scissor(st->sc_on, st->sc);
 }
 
+/* ENG_RUNSTATS=1: why runs break, printed at exit (per-field counts + hook flushes) */
+static long br_tex, br_env, br_alpha, br_blend, br_prio, br_sc, br_hook, br_full, br_quads, br_fog;
+static void bb_runstats(void)
+{
+    if (!getenv("ENG_RUNSTATS")) return;
+    fprintf(stderr, "[RUNSTATS] quads %ld  breaks: tex %ld env %ld alpha %ld blend %ld prio %ld scissor %ld fog %ld hook %ld full %ld\n",
+            br_quads, br_tex, br_env, br_alpha, br_blend, br_prio, br_sc, br_fog, br_hook, br_full);
+}
+
 /* qa_* hold the quad's clipped polygon: append it as fan triangles, flushing
  * when the run's state changes or the buffer is full. */
-static void bb_emit(int n, const struct bbstate *st)
+static void bb_emit(int n, const struct bbstate *st_)
 {
+    struct bbstate st_buf = *st_;
     static int nobatch = -1;                            /* ENG_NOBATCH=1: one draw per quad, for A/B bisection.
                                                          * Per-quad textures (PROPCYCL_TEXATLAS=0) never batch:
                                                          * every quad is its own texture, so runs are 1 anyway. */
+    static int rs_once;
+    if (!rs_once) { rs_once = 1; atexit(bb_runstats); }
+    br_quads++;
+    /* an UNFOGGED textured quad can ride a FOGGED run on the same page: vertex
+     * alpha 1.0 makes the fog interpolation the identity (t*1 + F*0), so adopt
+     * the run's fog state instead of breaking it -- in Dirt Dash's city the
+     * distant runs are nearly all fogged. Only unfogged quads (alpha == 1.0)
+     * qualify; prio mode never takes the single-pass fog path at all. */
+    if (st_buf.tex_on && !st_buf.fog && bb_valid && bb_run.tex_on && bb_run.fog && st_buf.tex == bb_run.tex) {
+        st_buf.fog = bb_run.fog;
+        memcpy(st_buf.frgb, bb_run.frgb, sizeof st_buf.frgb);
+    }
+    const struct bbstate *st = &st_buf;
     if (nobatch < 0) { const char *e = getenv("ENG_NOBATCH"); nobatch = (e && *e == '1') || !tex_bake_atlas_active(); }
-    if (bb_valid && memcmp(st, &bb_run, sizeof bb_run) != 0) { bb_flush(); bb_valid = 0; }
+    if (bb_valid && memcmp(st, &bb_run, sizeof bb_run) != 0) {
+        if (st->tex != bb_run.tex || st->tex_on != bb_run.tex_on) br_tex++;
+        if (st->env != bb_run.env) br_env++;
+        if (st->alpha != bb_run.alpha) br_alpha++;
+        if (st->blend != bb_run.blend) br_blend++;
+        if (st->prio != bb_run.prio) br_prio++;
+        if (st->sc_on != bb_run.sc_on || memcmp(st->sc, bb_run.sc, sizeof st->sc)) br_sc++;
+        if (st->fog != bb_run.fog || memcmp(st->frgb, bb_run.frgb, sizeof st->frgb)) br_fog++;
+        bb_flush(); bb_valid = 0;
+    }
     if (!bb_valid) { bb_run = *st; bb_apply(st); bb_valid = 1; }
     if (nobatch) bb_flush();                            /* start empty: draw just this quad below */
-    if (bb_n + (n - 2) * 3 > BB_MAXV) bb_flush();
+    if (bb_n + (n - 2) * 3 > BB_MAXV) { br_full++; bb_flush(); }
     for (int i = 1; i + 1 < n; i++)
         for (int k = 0; k < 3; k++) {
             int s = k == 0 ? 0 : i + k - 1;              /* fan: (0, i, i+1) */
@@ -260,10 +426,18 @@ static void bb_emit(int n, const struct bbstate *st)
     if (nobatch) { bb_flush(); bb_valid = 0; }
 }
 
-/* tex_bake's flush hook: a bake is about to overwrite page pixels the pending
- * batch may still reference -- draw it, and re-apply state after (the bake's
- * own bind/upload changed it behind our back). */
-static void bb_bake_hook(void) { bb_flush(); bb_valid = 0; qs_reset(); }
+/* tex_bake's flush hook: a bake is about to write page_tex's shadow, and
+ * buffered quads may reference pixels on it -- draw them first, then re-apply
+ * state (atlas_page_init bound a new page behind our back). A page-conditional
+ * flush (same page only) was TRIED and corrupted renders (dd/tw vid gates):
+ * reverted pending a proper mechanism study. */
+static void bb_bake_hook(GLuint page_tex)
+{
+    (void)page_tex;
+    br_hook++;
+    if (bb_valid) bb_flush();
+    bb_valid = 0; qs_reset();
+}
 /* the GL pass draws the fan-triangulated expansion of qa_*: Mesa tessellates
  * GL_POLYGON per call (measured ~4-6 us/draw on a 1.8 GHz mobile CPU), so the
  * fan is expanded on our side and drawn as GL_TRIANGLES -- same triangles the
@@ -276,6 +450,7 @@ void eng_draw_begin(void)
 {
     static int hook_once;
     if (!hook_once) { tex_bake_set_flush_hook(bb_bake_hook); hook_once = 1; }
+    mt_resolve();
     glGetIntegerv(GL_VIEWPORT, draw_vp);
     eng_draw_resume();
 }
@@ -300,6 +475,17 @@ void eng_draw_end(void)
     /* restore the state the per-quad code used to leave behind: the sprite, text and
      * post passes (and Rave Racer's 2D) were written against it (a leftover
      * COMBINE/RGB_SCALE texenv visibly brightened Rave Racer's HUD) */
+    if (qs.fog) {                           /* single-pass fog: unit 1 off, unit 0 plain */
+        p_active_texture(GL_TEXTURE1);
+        glDisable(GL_TEXTURE_2D);
+        glTexEnvi(GL_TEXTURE_ENV, GL_TEXTURE_ENV_MODE, GL_MODULATE);
+        p_active_texture(GL_TEXTURE0);
+        glTexEnvi(GL_TEXTURE_ENV, GL_COMBINE_ALPHA, GL_MODULATE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE0_ALPHA, GL_TEXTURE);
+        glTexEnvi(GL_TEXTURE_ENV, GL_SOURCE1_ALPHA, GL_PRIMARY_COLOR);
+        glTexEnvf(GL_TEXTURE_ENV, GL_RGB_SCALE, 1.0f);
+        qs.fog = 0;
+    }
     glDisable(GL_TEXTURE_2D);
     glEnable(GL_ALPHA_TEST);
     glDisable(GL_BLEND);
@@ -500,23 +686,94 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
      *
      * GL_RGB_SCALE (texture_env_combine, GL 1.3) multiplies the combiner
      * output by 1, 2 or 4 AFTER the modulate, which is precisely the missing
-     * headroom. Pick the smallest scale covering this quad's peak bri and
-     * pre-divide the per-vertex colour by it: the product is unchanged
-     * (texel * bri/64), the gouraud interpolation is still linear, and the
-     * clamp now happens at the end as it does in the reference. */
-    int rgb_scale = 1;
-    if (cfg->shade) {
-        float peak = 0.0f;
-        for (int i = 0; i < ncv; i++) if (cv[i].bri > peak) peak = cv[i].bri;
-        if (peak > 2.0f)      rgb_scale = 4;
-        else if (peak > 1.0f) rgb_scale = 2;
-    }
+     * headroom. The scale is ALWAYS 4 with the colour pre-divided by 4:
+     * dividing and re-multiplying by a power of two commutes with rounding
+     * at ANY precision (it only moves the exponent), so this is bit-exact
+     * against picking the smallest scale per quad -- and a constant scale
+     * stops rgb_scale changes breaking the batch (~200 runs a frame in Dirt
+     * Dash's city). bri <= 173 measured, so bri/4 <= 0.68: no vertex clamp. */
+    int rgb_scale = 4;
 
     double _tg = eng_now();
     /* 1.0 = every quad, as before; with write_prio_alpha, the prioverchar bit */
     const float prio_a = !cfg->write_prio_alpha ? 1.0f : ((q->cmode & 7) == 1 ? 1.0f : 0.0f);
     const int base_alpha = !cfg->write_prio_alpha;      /* that mode writes the prio bit untested */
+
+    /* SINGLE-PASS FOG setup: textured quads with the prio channel off draw the
+     * CZ fog in the same call (two combiner units, see qs_fog). The vertex
+     * alpha carries the fog factor (1 = unfogged), the run state the mode and
+     * fog colour. Solids and prio-mode quads keep the second pass below. */
+    int fogm = 0;
+    float fogrgb[3] = { 0.0f, 0.0f, 0.0f };
+    float fogv[32];
+    eng_fog f1;
+    if (!solid && base_alpha && mt_state == 1 && cfg->fog && cfg->fog_quad &&
+        !(q->cz_adjust & 0x800000)) {
+        memset(&f1, 0, sizeof f1);
+        f1.alpha_const = -1;
+        if (cfg->fog_quad(q, &f1)) {
+            fogrgb[0] = f1.rgb[0] / 255.0f; fogrgb[1] = f1.rgb[1] / 255.0f; fogrgb[2] = f1.rgb[2] / 255.0f;
+            if (cfg->fade_rgb) cfg->fade_rgb(&fogrgb[0], &fogrgb[1], &fogrgb[2]);   /* fade applies after fog */
+            int any = 0;
+            for (int i = 0; i < ncv; i++) {
+                int32_t zz = (cv[i].w > 0.0f) ? (int32_t)(1.0f / cv[i].w) : 1;
+                int a = eng_fog_alpha(&f1, zz);
+                if (a < g_fogA_min) g_fogA_min = a;
+                if (a > g_fogA_max) g_fogA_max = a;
+                fogv[i] = a / 255.0f;
+                if (a < 255) any = 1;
+            }
+            if (any) { fogm = cfg->fog_before_shade ? 1 : 2; g_fogged_quads++; }
+        }
+    }
+
     if (solid) {
+        /* SOLID through the batch's CURRENT page: with the white texel at
+         * (0,0) of every atlas page, a solid quad is a textured quad sampling
+         * white -- tex_on stays 1, tex is the run's page, and with rgb_scale
+         * a constant 4 the state usually matches the run: solid quads no
+         * longer break it (~500 tex breaks a frame in Dirt Dash's city).
+         * Colours go in /4 like every shaded quad; the x4 rescale is exact. */
+        GLuint wtex = 0;
+        if (tex_bake_atlas_active() && !cfg->fog_before_shade)      /* fog-before-shade solids keep the whole legacy path (Rave Racer) */
+            wtex = (bb_valid && bb_run.tex_on) ? bb_run.tex : tex_bake_white_tex();
+        if (wtex) {
+            /* fog on a solid (Super 22 order only: fog-before-shade solids keep
+             * the two-pass fog below) */
+            if (base_alpha && mt_state == 1 && !cfg->fog_before_shade && cfg->fog && cfg->fog_quad &&
+                !(q->cz_adjust & 0x800000)) {
+                memset(&f1, 0, sizeof f1);
+                f1.alpha_const = -1;
+                if (cfg->fog_quad(q, &f1)) {
+                    fogrgb[0] = f1.rgb[0] / 255.0f; fogrgb[1] = f1.rgb[1] / 255.0f; fogrgb[2] = f1.rgb[2] / 255.0f;
+                    if (cfg->fade_rgb) cfg->fade_rgb(&fogrgb[0], &fogrgb[1], &fogrgb[2]);
+                    int any = 0;
+                    for (int i = 0; i < ncv; i++) {
+                        int32_t zz = (cv[i].w > 0.0f) ? (int32_t)(1.0f / cv[i].w) : 1;
+                        int a = eng_fog_alpha(&f1, zz);
+                        fogv[i] = a / 255.0f;
+                        if (a < 255) any = 1;
+                    }
+                    if (any) { fogm = 2; g_fogged_quads++; }
+                }
+            }
+            int n = ncv > 32 ? 32 : ncv;
+            for (int i = 0; i < n; i++) {
+                float k = solid_noshade ? 1.0f : cv[i].bri;
+                float cr = solid_rgb[0] * k, cg = solid_rgb[1] * k, cb = solid_rgb[2] * k;
+                if (cfg->fade_rgb) cfg->fade_rgb(&cr, &cg, &cb);
+                qa_rgba[i*4+0] = cr * 0.25f; qa_rgba[i*4+1] = cg * 0.25f;
+                qa_rgba[i*4+2] = cb * 0.25f; qa_rgba[i*4+3] = fogm ? fogv[i] : prio_a;
+                qa_st[i*4+0] = 0.0f; qa_st[i*4+1] = 0.0f;
+                qa_st[i*4+2] = 0.0f; qa_st[i*4+3] = 1.0f;
+                qa_xy[i*2+0] = cv[i].x; qa_xy[i*2+1] = cv[i].y;
+            }
+            bb_emit(n, &(struct bbstate){ .tex = wtex, .env = 4, .alpha = base_alpha, .blend = 0, .prio = 0,
+                                          .tex_on = 1, .sc_on = scissored, .sc = { scbox[0], scbox[1], scbox[2], scbox[3] },
+                                          .fog = fogm, .frgb = { fogrgb[0], fogrgb[1], fogrgb[2] } });
+            g_perf_gl += eng_now() - _tg;
+            goto fog_pass;      /* an unfogged-here solid still gets the two-pass fog when single-pass was unavailable */
+        }
         int n = ncv > 32 ? 32 : ncv;
         for (int i = 0; i < n; i++) {
             float k = solid_noshade ? 1.0f : cv[i].bri;
@@ -528,7 +785,6 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
         }
         bb_emit(n, &(struct bbstate){ .tex_on = 0, .alpha = base_alpha, .blend = 0, .prio = 0,
                                       .sc_on = scissored, .sc = { scbox[0], scbox[1], scbox[2], scbox[3] } });
-        rgb_scale = 1;
     } else {
     {
         float inv = 1.0f / (float)rgb_scale;
@@ -537,29 +793,34 @@ static void draw_quad_one(const geo_quad *q, const eng_draw_cfg *cfg)
             float cr = cv[i].bri * inv, cg = cv[i].bri * inv, cb = cv[i].bri * inv;
             if (cfg->fade_rgb) cfg->fade_rgb(&cr, &cg, &cb);
             qa_rgba[i*4+0] = cr; qa_rgba[i*4+1] = cg;
-            qa_rgba[i*4+2] = cb; qa_rgba[i*4+3] = prio_a;
-            qa_st[i*4+0] = cv[i].s; qa_st[i*4+1] = cv[i].t;
+            qa_rgba[i*4+2] = cb; qa_rgba[i*4+3] = fogm ? fogv[i] : prio_a;
+            /* the atlas slot origin is folded in HERE, post-clip, as s + ou*q --
+             * exactly what the GL texture matrix computed per emitted vertex
+             * (matrix follows clipping on the GPU), so batching no longer
+             * breaks per slot. bou/bov are 0 with per-quad textures: s+0 == s. */
+            qa_st[i*4+0] = cv[i].s + bou * cv[i].w; qa_st[i*4+1] = cv[i].t + bov * cv[i].w;
             qa_st[i*4+2] = 0.0f;   qa_st[i*4+3] = cv[i].w;
             qa_xy[i*2+0] = cv[i].x; qa_xy[i*2+1] = cv[i].y;
         }
         bb_emit(n, &(struct bbstate){ .tex = tex, .env = rgb_scale, .alpha = base_alpha, .blend = 0, .prio = 0,
                                       .tex_on = 1, .sc_on = scissored, .sc = { scbox[0], scbox[1], scbox[2], scbox[3] },
-                                      .ou = bou, .ov = bov });
+                                      .fog = fogm, .frgb = { fogrgb[0], fogrgb[1], fogrgb[2] } });
     }
     }
     g_perf_gl += eng_now() - _tg;
 
-    /* ---- CZ depth fog -------------------------------------------------
-     * The reference chain is per pixel:
+    /* ---- CZ depth fog (two-pass fallback) ----------------------------------
+     * Textured quads with the prio channel off draw fog in the SAME call (the
+     * single-pass path above). This second blended pass remains for solids and
+     * prio-mode quads, and for everything when multitexture is unavailable
+     * (ENG_FOG2PASS=1):
      *     cz = min(z >> 8, 0x1fff);  ff = cztab[cz] + sdelta
      *     rgb = blend(rgb, fog_rgb, 0xff - min(ff, 0xff))
-     * We do it as a second pass with per-vertex alpha, gouraud interpolated
-     * by GL: result = fog*a + dst*(1-a), which is exactly blend(). A second
-     * pass rather than GL_FOG keeps this on plain GL 1.1 -- GL_FOG_COORD is
-     * 1.4 and would need extension plumbing for no gain here.
+     * result = fog*a + dst*(1-a), which is exactly blend().
      * Depth test is off on this path (painter's algorithm), so the overlay
      * lands exactly on the quad just drawn. */
-    if (cfg->fog && cfg->fog_quad) {
+fog_pass:
+    if (fogm == 0 && cfg->fog && cfg->fog_quad) {
         /* BIT(cz_adjust,23) disables fog for the quad regardless of the
          * board's own gate (pc_raster_model.py raster(); namcos22_v.cpp
          * poly3d_drawquad on System 22). */

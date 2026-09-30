@@ -296,13 +296,14 @@ typedef struct {
     int cx, cy, row_h;                         /* shelf cursor */
     arect fr[512]; int nfr;                    /* evicted rectangles */
     uint8_t *shadow;                           /* the page's pixels, CPU side */
-    int dirty_y0, dirty_y1;                    /* shadow rows not yet uploaded ([y0, y1)) */
+    arect dr[128]; int ndr;                    /* dirty slot rects since the last upload */
+    int dirty_x0, dirty_y0, dirty_x1, dirty_y1;  /* their bbox (the upload when ndr overflows) */
 } apage;
 static apage apages[ATLAS_MAXP];
 static int  ap_n, ap_reset_hand;
 static int  g_tex_atlas = -1;                  /* lazy env read */
-static void (*atlas_flush_hook)(void);
-void tex_bake_set_flush_hook(void (*f)(void)) { atlas_flush_hook = f; }
+static void (*atlas_flush_hook)(GLuint page_tex);
+void tex_bake_set_flush_hook(void (*f)(GLuint)) { atlas_flush_hook = f; }
 
 static int atlas_on(void)
 {
@@ -311,8 +312,8 @@ static int atlas_on(void)
 }
 int tex_bake_atlas_active(void) { return atlas_on(); }
 
-/* Bakes write the page's SHADOW (CPU memory); the GL texture is refreshed in whole
- * dirty ROW BANDS, once, when a drawn quad actually needs the page
+/* Bakes write the page's SHADOW (CPU memory); the GL texture is refreshed in
+ * dirty SLOT RECTS, once, when a drawn quad actually needs the page
  * (tex_bake_commit). A scene change's hundreds of bakes become a handful of
  * uploads -- per-call, a glTexSubImage2D costs ~18 us on a Mesa/i965 mobile
  * driver, and 1700 of them were the 30 ms frame at Dirt Dash's race start. */
@@ -320,14 +321,47 @@ void tex_bake_commit(GLuint tex)               /* upload tex's page if bakes dir
 {
     for (int i = 0; i < ap_n; i++) {
         apage *p = &apages[i];
-        if (p->tex != tex || p->dirty_y0 >= p->dirty_y1) continue;
+        if (p->tex != tex || !p->ndr) continue;
         glBindTexture(GL_TEXTURE_2D, tex);
         glPixelStorei(GL_UNPACK_ROW_LENGTH, ATLAS_DIM);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, p->dirty_y0, ATLAS_DIM, p->dirty_y1 - p->dirty_y0,
-                        GL_RGBA, GL_UNSIGNED_BYTE, p->shadow + (size_t)p->dirty_y0 * ATLAS_DIM * 4);
+        if (p->ndr > 0) {
+            for (int r = 0; r < p->ndr; r++) {
+                const arect *d = &p->dr[r];
+                glTexSubImage2D(GL_TEXTURE_2D, 0, d->x, d->y, d->w, d->h, GL_RGBA, GL_UNSIGNED_BYTE,
+                                p->shadow + ((size_t)d->y * ATLAS_DIM + d->x) * 4);
+            }
+        } else {
+            glTexSubImage2D(GL_TEXTURE_2D, 0, p->dirty_x0, p->dirty_y0, p->dirty_x1 - p->dirty_x0, p->dirty_y1 - p->dirty_y0,
+                            GL_RGBA, GL_UNSIGNED_BYTE, p->shadow + ((size_t)p->dirty_y0 * ATLAS_DIM + p->dirty_x0) * 4);
+        }
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
-        p->dirty_y0 = ATLAS_DIM; p->dirty_y1 = 0;
+        p->ndr = 0; p->dirty_x0 = p->dirty_y0 = ATLAS_DIM; p->dirty_x1 = p->dirty_y1 = 0;
         return;
+    }
+}
+
+/* mark a slot's pixels dirty: uploaded as a RECT list, not a full-width row
+ * band -- a band paid 2048 pixels of width per dirty row, so a cold scene
+ * change uploaded whole pages in one frame (the ~70 ms host spike at Dirt
+ * Dash's race start). Rects upload the baked area only; a full list (128
+ * slots between draws of the page) degrades to their bbox (ndr = -1). */
+static void page_dirty(int p, int x, int y, int w, int h)
+{
+    apage *ap = &apages[p];
+    if (x < ap->dirty_x0) ap->dirty_x0 = x;
+    if (y < ap->dirty_y0) ap->dirty_y0 = y;
+    if (x + w > ap->dirty_x1) ap->dirty_x1 = x + w;
+    if (y + h > ap->dirty_y1) ap->dirty_y1 = y + h;
+    if (ap->ndr >= 0) {
+        /* shelf allocation fills a page left to right: a rect continuing the
+         * previous one on the same rows just extends it (one upload per shelf
+         * row, not per slot) */
+        if (ap->ndr > 0) {
+            arect *l = &ap->dr[ap->ndr - 1];
+            if (l->y == y && l->h == h && l->x + l->w == x) { l->w += w; return; }
+        }
+        if (ap->ndr < 128) ap->dr[ap->ndr++] = (arect){ (uint16_t)x, (uint16_t)y, (uint16_t)w, (uint16_t)h };
+        else ap->ndr = -1;
     }
 }
 
@@ -342,10 +376,19 @@ static void atlas_page_init(int i)
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, ATLAS_DIM, ATLAS_DIM, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
     apages[i].shadow = malloc((size_t)ATLAS_DIM * ATLAS_DIM * 4);
     if (!apages[i].shadow) fprintf(stderr, "[TEX] atlas shadow: out of memory\n");
-    apages[i].dirty_y0 = ATLAS_DIM; apages[i].dirty_y1 = 0;   /* empty band */
+    apages[i].ndr = 0; apages[i].dirty_x0 = apages[i].dirty_y0 = ATLAS_DIM; apages[i].dirty_x1 = apages[i].dirty_y1 = 0;
     apages[i].cx = apages[i].cy = apages[i].row_h = 0;
     apages[i].nfr = 0;
+    /* texel (0,0) is a permanent WHITE slot: solid quads sample it through the
+     * normal textured path and so stay inside the batch's current run */
+    if (apages[i].shadow) {
+        memset(apages[i].shadow, 0xFF, 4);
+        page_dirty(i, 0, 0, 1, 1);
+    }
+    apages[i].cx = 1;                                       /* slot (0,0) is taken */
 }
+
+GLuint tex_bake_white_tex(void) { return ap_n ? apages[0].tex : 0; }
 
 /* evict every cache entry living on page p (a page reset) */
 static void atlas_page_reset(int p);
@@ -467,8 +510,16 @@ static int    tex_evict_hand  = 0;
 static int tex_cache_total = 0;
 
 /* (atlas) a page reset evicts every entry whose slot is on it */
+long g_tex_page_resets;
 static void atlas_page_reset(int p)
 {
+    g_tex_page_resets++;
+    /* the reset DISCARDS the page's unuploaded dirty band and reuses the space:
+     * upload it and draw any buffered quads referencing it first -- a band
+     * cleared before its slots ever reached the GL texture draws as garbage
+     * (a band can span many bakes: commits happen per drawn page) */
+    tex_bake_commit(apages[p].tex);
+    if (atlas_flush_hook) atlas_flush_hook(apages[p].tex);
     for (int i = 0; i < TEX_CACHE_SIZE; i++) {
         TexCacheEntry *e = &tex_cache[i];
         if (e->occupied && e->a_page == p) {
@@ -478,9 +529,11 @@ static void atlas_page_reset(int p)
             e->occupied = 0;
         }
     }
-    apages[p].cx = apages[p].cy = apages[p].row_h = 0;
+    apages[p].cx = 1;                   /* texel (0,0) stays the white slot */
+    apages[p].cy = apages[p].row_h = 0;
     apages[p].nfr = 0;
-    apages[p].dirty_y0 = ATLAS_DIM; apages[p].dirty_y1 = 0;
+    apages[p].ndr = 0; apages[p].dirty_x0 = apages[p].dirty_y0 = ATLAS_DIM; apages[p].dirty_x1 = apages[p].dirty_y1 = 0;
+    page_dirty(p, 0, 0, 1, 1);          /* keep the white slot uploaded */
 }
 
 /* Static pixel buffer for baking (TEX_BAKE_MAX^2 RGBA, reused each bake) */
@@ -516,6 +569,18 @@ void renderer_texture_init(void) {
     tex_frame_misses = 0;
     tex_cache_bytes  = 0;
     tex_evict_hand   = 0;
+    /* Preallocate every atlas page: a scene change used to pay its pages'
+     * glTexImage2D storm in ONE frame (a 30+ ms spike at Dirt Dash's race
+     * start); at boot it is invisible. the count is capped (see below). */
+    if (atlas_on()) {
+        /* 8 pages (128 MB + shadows) by default; the rest grow on demand in
+         * atlas_alloc. ENG_ATLAS_PREALLOC=<n> raises it (28 = every page). */
+        int want = 8;
+        const char *e = getenv("ENG_ATLAS_PREALLOC");
+        if (e && *e) want = atoi(e);
+        if (want > ATLAS_MAXP) want = ATLAS_MAXP;
+        while (ap_n < want) atlas_page_init(ap_n++);
+    }
 }
 
 static uint32_t tex_cache_hash(int min_u, int min_v, int range_u, int range_v,
@@ -793,15 +858,14 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
     uint8_t *bake_dst = tex_pixel_buf; long bake_stride = (long)bw * 4;
     if (atlas_on()) {
         /* allocate the slot and bake STRAIGHT into the page's shadow; the GL
-         * texture is refreshed in row bands when a drawn quad needs the page */
+         * texture is refreshed in dirty rects when a drawn quad needs the page */
         atlas_alloc(bw, bh, &slot_page, &slot_x, &slot_y);   /* never fails: a full atlas resets a page */
-        if (atlas_flush_hook) atlas_flush_hook();            /* buffered quads hold texcoords into the pages: draw them before the bytes change */
+        if (atlas_flush_hook) atlas_flush_hook(apages[slot_page].tex);   /* buffered quads may reference pixels on this page: draw them before the bytes change */
         apage *ap = &apages[slot_page];
         if (ap->shadow) {
             bake_dst = ap->shadow + ((size_t)slot_y * ATLAS_DIM + slot_x) * 4;
             bake_stride = (long)ATLAS_DIM * 4;
-            if (slot_y < ap->dirty_y0) ap->dirty_y0 = slot_y;
-            if (slot_y + bh > ap->dirty_y1) ap->dirty_y1 = slot_y + bh;
+            page_dirty(slot_page, slot_x, slot_y, bw, bh);
         }
     }
     for (int py = 0; py < bh; py++) {
@@ -919,7 +983,7 @@ static GLuint bake_impl(int min_u, int min_v, int range_u, int range_v,
      * profile put 28.8% of the entire run inside __vdso_clock_gettime called
      * from libnvidia-eglcore, which is what a driver spinning on a fence
      * looks like. PROPCYCL_TEXORPHAN=0 restores the old behaviour for A/B. */
-    if (atlas_flush_hook) atlas_flush_hook();   /* a recycled object's storage is about to be discarded/replaced: buffered quads draw first */
+    if (atlas_flush_hook) atlas_flush_hook(tex);   /* a recycled object's storage is about to be discarded/replaced: buffered quads draw first */
     if (!g_tex_orphan && had_w == tw && had_h == th) {
         tex_subimages++;
     } else {

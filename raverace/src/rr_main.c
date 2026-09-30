@@ -28,9 +28,12 @@
 #include "rr_scene.h"
 #include "rr_lift_rt.h"
 #include "lift_cpu.h"
+#include "rr_game.h"
 #include "rr_lifted.h"
 #include "rr_input.h"
 #include "rr_sound.h"
+#include "rr_link.h"
+#include "rr_net.h"
 
 bool rr_host_open(int scale);
 bool rr_host_frame(void);
@@ -191,8 +194,13 @@ void rr_tick(void)
         if (frame % 120 == 0) rr_hw_eeprom_save();     /* the test menu's settings and the records, once the game has changed them */
         do {
             if (!rr_host_frame()) { perf_report(); rr_hw_eeprom_save(); rr_audio_close(); rr_host_close(); fprintf(stderr, "[RR] window closed at frame %u\n", frame); exit(0); }
+            /* the Online menu lives in this loop: the built-in host and the lobby (HELLO/WELCOME, ROSTER, READY,
+             * START) must keep running while it is open, or "Host a LAN game" never gets its own HELLO.
+             * Not during a race session: send_frame() would stage link packets for a frozen game. */
+            if (rr_host_paused() && !rr_net_session_active()) rr_net_poll();
         } while (rr_host_paused());
     }
+    rr_net_apply_inputs();                         /* online: the automatic gas that starts every machine together */
     rr_input_frame(frame);                         /* replay overrides, recorder logs */
     if (perf_on) t_frame_start = now_ms();
     if (shot_dir && shot_every && frame % shot_every == 0) {
@@ -204,8 +212,10 @@ void rr_tick(void)
     }
     vblank_slices = 2;
     rr_dsp_vblank();
-    rr_hw_vblank();
-    rr_deliver_irqs(rr_hw_irq_level);
+    if (!rr_env_active()) rr_hw_vblank();      /* (a trace oracle refreshes at MAME's own vblank interrupt: rr_env.c) */
+    rr_net_poll();                       /* online play: peer FRAMEs into the link queue before the poll injects one */
+    rr_link_poll();                      /* a received link packet's SCI IRQ lands at this frame edge */
+    if (!rr_env_active()) rr_deliver_irqs(rr_hw_irq_level);   /* a trace oracle lands the interrupts itself */
     if (dump_dir) {             /* RR_DUMP_EVERY=n (default 60), RR_DUMP_FROM=f: dump cadence */
         static unsigned every, from; static int init;
         if (!init) { const char *e = getenv("RR_DUMP_EVERY"), *f = getenv("RR_DUMP_FROM");
@@ -307,9 +317,9 @@ int main(int argc, char **argv)
     /* First run: take the ROMs out of MAME's raverace.zip + namcoc74.zip if the ROM
      * folder is incomplete (src/rr_romzip.c) -- how the Windows build is set up;
      * chips unzipped loose into roms/ work too. */
-    if (rr_romzip_missing(rom_dir) && !strcmp(rom_dir, "extracted") && !rr_romzip_missing("roms"))
+    if (g_rr_game->autosetup && rr_romzip_missing(rom_dir) && !strcmp(rom_dir, "extracted") && !rr_romzip_missing("roms"))
         rom_dir = "roms";
-    if (rr_romzip_missing(rom_dir)) {
+    if (g_rr_game->autosetup && rr_romzip_missing(rom_dir)) {
         char err[512], *base = SDL_GetBasePath();
         if (!rr_romzip_autosetup(rom_dir, base, err, sizeof err)) {
             fprintf(stderr, "Rave Racer needs its ROMs: %s\n", err);
@@ -330,6 +340,9 @@ int main(int argc, char **argv)
     rr_audio_init(rom_dir);
     rr_sound_init(rom_dir);
     rr_hw_init(rom_dir);
+#ifdef RR_TRACE
+    rr_env_init();                         /* RR_ENV: the trace oracle's environment (dev builds) */
+#endif
     if (windowed) rr_hw_eeprom_persist("rr_eeprom.nv");   /* a player's session keeps its settings and records; headless runs never do */
     if (freeplay >= 0) rr_hw_set_freeplay(freeplay);
     else if (windowed && g_cfg_freeplay >= 0) {        /* the saved menu choice, windowed runs only */
@@ -337,6 +350,26 @@ int main(int argc, char **argv)
         fprintf(stderr, "[RR] %s (rr_controls.cfg)\n", g_cfg_freeplay ? "free play" : "coins required");
     }
     if (windowed) rr_hw_set_steering_motor(g_cfg_ffb_strength > 0);   /* the game only drives the motor with its own option ON */
+    { const char *e = getenv("RR_LINK_CABINET");              /* temporary: the lobby/config will drive this */
+      if (e) rr_hw_set_link_cabinet(atoi(e)); }
+    if (g_cfg_net_name[0]) rr_net_set_name(g_cfg_net_name);        /* the saved lobby name (windowed: from rr_controls.cfg) */
+    if (windowed && g_cfg_net_server[0]) rr_net_set_server(g_cfg_net_server);  /* remembered, but connecting stays a menu action */
+    { const char *srv = getenv("RR_NET_SERVER");            /* headless/test bootstrap: connect at boot (env wins over cfg) */
+      if (srv && *srv) {
+          const char *nm = getenv("RR_NET_NAME");
+          if (nm && *nm) rr_net_set_name(nm);
+          if (rr_net_set_server(srv)) rr_net_connect();
+      }
+      const char *hst = getenv("RR_NET_HOST");                /* headless/test: host a LAN game (the built-in server) */
+      if (hst && *hst == '1') {
+          const char *nm = getenv("RR_NET_NAME"); if (nm && *nm) rr_net_set_name(nm);
+          rr_net_host_start();
+      }
+      const char *dsc = getenv("RR_NET_DISCOVER");            /* headless/test: search the LAN and join the first host */
+      if (dsc && *dsc == '1') {
+          const char *nm = getenv("RR_NET_NAME"); if (nm && *nm) rr_net_set_name(nm);
+          rr_net_discover_autojoin(1); rr_net_discover();
+      } }
 #ifdef RR_ORACLE
     if (!g_rr_gl && !rr_video_init(rom_dir)) fprintf(stderr, "[RR] video ROMs missing\n");
 #endif
@@ -351,7 +384,7 @@ int main(int argc, char **argv)
     fprintf(stderr, "[RR] reset: SP=%08X PC=%08X\n", (uint32_t)RG4(REG_SP), rr_read(4, 4));
     rr_call_push(0xFFFFFFFEu);                  /* bottom of the shadow stack */
     { extern void rd_init(void); rd_init(); }   /* readable-C replacements (src/rd) */
-    L_4000();                                   /* entry_reset: never returns */
+    g_rr_game->entry();                         /* entry_reset (this game's reset PC): never returns */
     fprintf(stderr, "[RR] entry_reset returned?!\n");
     return 1;
 }

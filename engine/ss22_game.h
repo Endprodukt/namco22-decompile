@@ -37,7 +37,7 @@ typedef struct {
 typedef struct {
     const char *cg[8];                       /* the 8 texture chips */
     const char *ccrl, *ccrh;                 /* the texture tilemap and its attributes */
-    const char *scg[4];                      /* the sprite chips */
+    const char *scg[6];                      /* the sprite chips (a game may have up to six) */
     int         n_scg;
     size_t      sprite_region;               /* the sprite ROM region: the chips, then this fill */
     uint8_t     sprite_fill;                 /* MAME's ROMREGION_ERASEFF = 0xFF */
@@ -61,6 +61,7 @@ typedef struct ss22_game {
     const ss22_input_game *input;
     const eng_rom_t *roms; int n_roms;       /* the chips, name and size */
     const char *zip;                         /* the MAME set the game unpacks them from */
+    bool snd_poll_sync;                      /* the 68K polling the sound CPU's handshake word lets the MCU run a little (a boot-time SUBCPU wait that would otherwise miss a pulse the MCU raises and clears within one slice); 0 = off, the other games are unchanged */
     double out_gain;                         /* speaker gain for THIS game's chip levels (engine/audio_out.h); 0 = the shared default x6, which is Rave Racer's */
     const char *const *more_zips;            /* NULL-terminated: further zips of the same set searched for chips, e.g. a split set's clone zip ("dirtdasha.zip"); or NULL */
     void (*entry)(void);                     /* the 68K's reset entry in the lifted program: never returns */

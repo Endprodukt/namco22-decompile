@@ -9,7 +9,10 @@
 #ifdef _WIN32
 
 #include <errno.h>
+#define WIN32_LEAN_AND_MEAN      /* keep winsock.h out of windows.h so winsock2.h can follow */
 #include <windows.h>
+#include <winsock2.h>            /* rr_net.c's UDP socket (link ws2_32) */
+#include <ws2tcpip.h>            /* getaddrinfo */
 #include <stdlib.h>
 #include <time.h>
 #include <direct.h>

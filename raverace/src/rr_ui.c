@@ -39,15 +39,21 @@
 #include "rr_input.h"
 #include "rr_hw.h"
 #include "rr_sound.h"
+#include "rr_net.h"
 
 static struct nk_context *ctx;
 static SDL_Window *uwin;
 static bool open_, quit_req;
 static int rebinding = -1;             /* the action waiting for a key, or -1 */
+static int editing = -1;               /* the Online page's text row being edited (O_SERVER/O_NAME), or -1 */
+static char edit_buf[128];             /* its text while editing */
+static bool dlg_open;                  /* the floating Online play window */
+static int dlg_mode;                   /* 0 = Local LAN, 1 = Internet game */
+static bool was_session;               /* GO edge detector: close the menu when a race is armed */
 static float ui_scale = 1.0f;          /* drawable pixels per window unit (HiDPI) */
 
-enum { T_FILE, T_DISPLAY, T_AUDIO, T_CONTROLS, T_RECORD, T_N };
-static const char *tab_name[T_N] = { "File", "Display", "Audio", "Controls", "Record" };
+enum { T_FILE, T_DISPLAY, T_AUDIO, T_CONTROLS, T_RECORD, T_ONLINE, T_N };
+static const char *tab_name[T_N] = { "File", "Display", "Audio", "Controls", "Record", "Online" };
 static int tab = T_DISPLAY;
 static int row = 0;                    /* -1 = the tab strip */
 static bool kb_moved;                  /* keep the selected row in view after a key */
@@ -55,6 +61,15 @@ static bool kb_moved;                  /* keep the selected row in view after a 
 /* ---- the rows ------------------------------------------------------------- */
 enum { D_WIDE, D_DRAW, D_MODE, D_SIZE, D_RES, D_ASPECT, D_SCALING, D_N };
 enum { C_FREEPLAY, C_FFB, C_FFB_DIR, C_N };      /* the Controls page's rows before the bindings */
+enum { O_SERVER, O_NAME, O_HOST, O_FIND, O_CONNECT, O_STATUS, O_LOBBY0 };   /* then, not connected: one row per LAN game found; connected: the players, Ready, Start */
+static int online_rows(void) { return O_LOBBY0 + (rr_net_connected() ? rr_net_roster_count() + 2 : rr_net_found_count()); }
+static int online_self_ready(void)
+{
+    char nm[32]; int rdy, self;
+    for (int i = 0; i < rr_net_roster_count(); i++)
+        if (rr_net_roster(i, nm, sizeof nm, &rdy, &self) && self) return rdy;
+    return 0;
+}
 static int nrows(int t)
 {
     switch (t) {
@@ -63,6 +78,7 @@ static int nrows(int t)
     case T_AUDIO: return 1;
     case T_CONTROLS: return C_N + RR_ACT_N;
     case T_RECORD: return 1;
+    case T_ONLINE: return online_rows();
     }
     return 0;
 }
@@ -72,6 +88,7 @@ static bool has_value(int t, int r)
     if (t == T_DISPLAY || t == T_AUDIO) return true;
     if (t == T_CONTROLS) return r < C_N;
     if (t == T_RECORD) return true;
+    if (t == T_ONLINE) return r == O_SERVER || r == O_NAME || (rr_net_connected() && r == O_LOBBY0 + rr_net_roster_count());   /* server / name / ready */
     return false;
 }
 static bool row_enabled(int t, int r)
@@ -127,7 +144,42 @@ static void row_text(int t, int r, char *label, size_t ln, char *value, size_t v
         }
         break;
     case T_RECORD: snprintf(label, ln, "Record input"); snprintf(value, vn, "%s", rr_input_recording() ? "ON  (recording...)" : "OFF"); break;
+    case T_ONLINE: {
+        const int rc = rr_net_roster_count();
+        switch (r) {
+        case O_SERVER: snprintf(label, ln, "Server");
+            if (editing == O_SERVER) snprintf(value, vn, "%.90s_", edit_buf);     /* the cursor */
+            else snprintf(value, vn, "%.90s", g_cfg_net_server[0] ? g_cfg_net_server : "(not set)");
+            break;
+        case O_NAME: snprintf(label, ln, "Name");
+            if (editing == O_NAME) snprintf(value, vn, "%.16s_", edit_buf);       /* names are 16 bytes on the wire */
+            else snprintf(value, vn, "%s", g_cfg_net_name[0] ? g_cfg_net_name : "PLAYER");
+            break;
+        case O_HOST: snprintf(label, ln, "%s", rr_net_hosting() ? "Stop hosting" : "Host / join a game..."); break;
+        case O_FIND: snprintf(label, ln, "Find LAN games"); snprintf(value, vn, "%s", rr_net_discovering() ? "searching..." : ""); break;
+        case O_CONNECT: snprintf(label, ln, "%s", rr_net_connected() ? "Disconnect" : "Connect"); break;
+        case O_STATUS: snprintf(label, ln, "Status"); rr_net_status(value, vn); break;
+        default:
+            if (!rr_net_connected()) {
+                char lb[96];
+                snprintf(label, ln, "Join");
+                if (rr_net_found(r - O_LOBBY0, lb, sizeof lb, NULL, 0)) snprintf(value, vn, "%s", lb);
+            } else if (r >= O_LOBBY0 && r < O_LOBBY0 + rc) {
+                char nm[32]; int rdy, self;
+                snprintf(label, ln, "Player");
+                if (rr_net_roster(r - O_LOBBY0, nm, sizeof nm, &rdy, &self))
+                    snprintf(value, vn, "%d: %s%s%s", r - O_LOBBY0, nm, self ? " (you)" : "", rdy ? " [ready]" : "");
+            } else if (r == O_LOBBY0 + rc) { snprintf(label, ln, "Ready"); snprintf(value, vn, "%s", online_self_ready() ? "ON" : "OFF"); }
+            else snprintf(label, ln, "Start race");
+        }
+        break; }
     }
+}
+static void begin_edit(int r)
+{
+    editing = r;
+    snprintf(edit_buf, sizeof edit_buf, "%s", r == O_SERVER ? g_cfg_net_server : g_cfg_net_name);
+    SDL_StartTextInput();
 }
 static int cyc(int v, int d, int n) { return ((v + d) % n + n) % n; }
 /* dir: 0 = Enter / click, -1 / +1 = Left / Right */
@@ -173,6 +225,27 @@ static void row_change(int t, int r, int dir)
         else if (dir == 0) { rebinding = r - C_N; rr_input_capture_begin(rebinding); }
         break;
     case T_RECORD: rr_host_toggle_record(); break;
+    case T_ONLINE: {
+        const int rc = rr_net_roster_count();
+        if (r == O_SERVER || r == O_NAME) {
+            if (dir == 0) {                          /* Enter: modal text entry (SDL_TEXTINPUT in rr_ui_event) */
+                editing = r;
+                snprintf(edit_buf, sizeof edit_buf, "%s", r == O_SERVER ? g_cfg_net_server : g_cfg_net_name);
+                SDL_StartTextInput();
+            }
+        } else if (r == O_HOST && dir == 0) {
+            if (rr_net_hosting()) rr_net_host_stop(); else dlg_open = true;     /* the window picks LAN or Internet */
+        } else if (r == O_FIND && dir == 0) {
+            rr_net_discover();
+        } else if (r == O_CONNECT && dir == 0) {
+            if (rr_net_hosting()) rr_net_host_stop();            /* leaving a game you host closes it */
+            else if (rr_net_connected()) rr_net_disconnect(); else rr_net_connect();
+        } else if (!rr_net_connected()) {                        /* a found game: Enter joins it */
+            char ad[64];
+            if (dir == 0 && r >= O_LOBBY0 && rr_net_found(r - O_LOBBY0, NULL, 0, ad, sizeof ad)) { rr_host_set_net_server(ad); rr_net_connect(); }
+        } else if (r == O_LOBBY0 + rc) rr_net_set_ready(!online_self_ready());
+        else if (r == O_LOBBY0 + rc + 1 && dir == 0) rr_net_request_start();
+        break; }
     }
 }
 
@@ -201,7 +274,7 @@ bool rr_ui_init(SDL_Window *win)
 void rr_ui_shutdown(void) { if (ctx) nk_sdl_shutdown(); ctx = NULL; }
 bool rr_ui_is_open(void) { return open_; }
 bool rr_ui_quit_requested(void) { return quit_req; }
-void rr_ui_set_open(bool on) { open_ = on; rebinding = -1; if (on && row >= nrows(tab)) row = 0; }
+void rr_ui_set_open(bool on) { open_ = on; if (!on) dlg_open = false; rebinding = -1; if (!on && editing >= 0) { editing = -1; SDL_StopTextInput(); } if (on && row >= nrows(tab)) row = 0; }
 void rr_ui_input_begin(void) { if (ctx) nk_input_begin(ctx); }
 void rr_ui_input_end(void)   { if (ctx) nk_input_end(ctx); }
 
@@ -210,13 +283,14 @@ enum { K_UP, K_DOWN, K_LEFT, K_RIGHT, K_OK, K_BACK, K_TABPREV, K_TABNEXT };
 static void nav(int k)
 {
     const int n = nrows(tab);
+    if (dlg_open && k != K_BACK) return;             /* the Online play window is mouse/touch; Esc/B closes it */
     switch (k) {
     case K_UP:    row = row <= -1 ? n - 1 : row - 1; break;
     case K_DOWN:  row = row >= n - 1 ? -1 : row + 1; break;
     case K_LEFT:  if (row < 0) tab = cyc(tab, -1, T_N); else if (has_value(tab, row)) row_change(tab, row, -1); break;
     case K_RIGHT: if (row < 0) tab = cyc(tab, +1, T_N); else if (has_value(tab, row)) row_change(tab, row, +1); break;
     case K_OK:    if (row < 0) row = 0; else row_change(tab, row, 0); break;
-    case K_BACK:  open_ = false; break;
+    case K_BACK:  if (dlg_open) dlg_open = false; else open_ = false; break;
     case K_TABPREV: tab = cyc(tab, -1, T_N); row = 0; break;
     case K_TABNEXT: tab = cyc(tab, +1, T_N); row = 0; break;
     }
@@ -226,6 +300,28 @@ static void nav(int k)
 bool rr_ui_event(SDL_Event *e)
 {
     if (!ctx || !open_) return false;
+    if (editing >= 0) {                            /* the Online page's modal text entry: every event is ours */
+        if (e->type == SDL_TEXTINPUT) {
+            const size_t bl = strlen(edit_buf), tl = strlen(e->text.text);
+            const size_t cap = editing == O_NAME ? 16 : sizeof edit_buf - 2;   /* names are 16 bytes on the wire */
+            if (bl + tl <= cap) memcpy(edit_buf + bl, e->text.text, tl + 1);
+        } else if (e->type == SDL_KEYDOWN) {
+            switch (e->key.keysym.scancode) {
+            case SDL_SCANCODE_RETURN: case SDL_SCANCODE_KP_ENTER:
+                if (editing == O_SERVER) rr_host_set_net_server(edit_buf);     /* apply + save + resolve */
+                else rr_host_set_net_name(edit_buf);
+                editing = -1; SDL_StopTextInput();
+                break;
+            case SDL_SCANCODE_ESCAPE: editing = -1; SDL_StopTextInput(); break;
+            case SDL_SCANCODE_BACKSPACE: {
+                size_t l = strlen(edit_buf);
+                if (l) { edit_buf[--l] = 0; while (l > 0 && (edit_buf[l - 1] & 0xC0) == 0x80) edit_buf[--l] = 0; }  /* whole UTF-8 char */
+                break; }
+            default: break;
+            }
+        }
+        return true;
+    }
     if (rebinding >= 0) {
         if (rr_input_capture_event(rebinding, e)) rebinding = -1;
         return true;
@@ -268,7 +364,7 @@ bool rr_ui_event(SDL_Event *e)
 }
 /* RR_MENU_TEST and friends drive the menu without an input device */
 void rr_ui_test_nav(int k) { nav(k); kb_moved = true; }
-void rr_ui_test_goto(int t, int r) { tab = t; row = r; }
+void rr_ui_test_goto(int t, int r) { tab = t; row = r; if (editing >= 0) { editing = -1; SDL_StopTextInput(); } }
 
 /* ---- drawing ---------------------------------------------------------------- */
 static void labelf(nk_flags align, const char *fmt, ...)
@@ -283,9 +379,84 @@ static char hint_text[96]; static int hint_left;
 void rr_ui_set_hint(const char *text, int frames) { snprintf(hint_text, sizeof hint_text, "%s", text ? text : ""); hint_left = frames; }
 bool rr_ui_hint_active(void) { return ctx && !open_ && hint_left > 0 && hint_text[0]; }
 
+/* THE ONLINE PLAY WINDOW: opened by "Host / join a game...". A drop-down picks Local LAN (host one, or list the games
+ * found on the network) or Internet game (type a server IP or URL). Text entry reuses the modal editor above. */
+static void online_dialog(int ww, int wh)
+{
+    const float w = 460 < ww - 8 ? 460.0f : (float)ww - 8, h = 360 < wh - 40 ? 360.0f : (float)wh - 40;
+    if (nk_begin(ctx, "Online play", nk_rect(((float)ww - w) / 2, ((float)wh - h) / 2, w, h),
+                 NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE)) {
+        static const char *modes[2] = { "Local LAN", "Internet game" };
+        const bool conn = rr_net_connected(), hosting = rr_net_hosting();
+        char st[128]; rr_net_status(st, sizeof st);
+        nk_layout_row_dynamic(ctx, 26, 2);
+        nk_label(ctx, "Game type", NK_TEXT_LEFT);
+        if (!conn) dlg_mode = nk_combo(ctx, modes, 2, dlg_mode, 26, nk_vec2(200, 80));
+        else nk_label(ctx, modes[dlg_mode], NK_TEXT_LEFT);
+
+        if (!conn && dlg_mode == 0) {                       /* ---- Local LAN ---- */
+            nk_layout_row_dynamic(ctx, 28, 2);
+            if (nk_button_label(ctx, "Host a LAN game")) rr_net_host_start();
+            if (nk_button_label(ctx, rr_net_discovering() ? "Searching..." : "Find LAN games")) rr_net_discover();
+            nk_layout_row_dynamic(ctx, 20, 1);
+            nk_label(ctx, "Games on this network (click one to join):", NK_TEXT_LEFT);
+            const int nf = rr_net_found_count();
+            if (!nf) { nk_layout_row_dynamic(ctx, 22, 1); nk_label(ctx, rr_net_discovering() ? "searching..." : "none found - press Find LAN games", NK_TEXT_LEFT); }
+            for (int i = 0; i < nf; i++) {
+                char lb[96], ad[64], line[176];
+                if (!rr_net_found(i, lb, sizeof lb, ad, sizeof ad)) continue;
+                snprintf(line, sizeof line, "%s   [%s]", lb, ad);
+                nk_layout_row_dynamic(ctx, 26, 1);
+                if (nk_button_label(ctx, line)) { rr_host_set_net_server(ad); rr_net_connect(); }
+            }
+        } else if (!conn) {                                 /* ---- Internet game ---- */
+            nk_layout_row_dynamic(ctx, 20, 1);
+            nk_label(ctx, "Server IP or URL  (host or host:port, default port 27750)", NK_TEXT_LEFT);
+            char fld[130];
+            if (editing == O_SERVER) snprintf(fld, sizeof fld, "%.90s_", edit_buf);
+            else snprintf(fld, sizeof fld, "%.90s", g_cfg_net_server[0] ? g_cfg_net_server : "(click to type an address)");
+            nk_layout_row_dynamic(ctx, 28, 1);
+            if (nk_button_label(ctx, fld) && editing < 0) begin_edit(O_SERVER);
+            if (editing == O_SERVER) { nk_layout_row_dynamic(ctx, 18, 1); nk_label(ctx, "Enter applies, Esc cancels", NK_TEXT_LEFT); }
+            nk_layout_row_dynamic(ctx, 28, 1);
+            if (nk_button_label(ctx, "Connect") && editing < 0 && g_cfg_net_server[0]) {
+                if (hosting) rr_net_host_stop();
+                rr_host_set_net_server(g_cfg_net_server);
+                rr_net_connect();
+            }
+        } else {                                            /* ---- in a lobby ---- */
+            const int rc = rr_net_roster_count();
+            nk_layout_row_dynamic(ctx, 20, 1);
+            nk_label(ctx, "Players:", NK_TEXT_LEFT);
+            for (int i = 0; i < rc; i++) {
+                char nm[32]; int rdy, self;
+                if (!rr_net_roster(i, nm, sizeof nm, &rdy, &self)) continue;
+                nk_layout_row_dynamic(ctx, 20, 1);
+                labelf(NK_TEXT_LEFT, "  %d: %s%s%s", i, nm, self ? " (you)" : "", rdy ? " [ready]" : "");
+            }
+            nk_layout_row_dynamic(ctx, 28, 3);
+            if (nk_button_label(ctx, online_self_ready() ? "Not ready" : "Ready")) rr_net_set_ready(!online_self_ready());
+            if (nk_button_label(ctx, "Start race")) rr_net_request_start();   /* refused until everyone is Ready */
+            if (nk_button_label(ctx, hosting ? "Stop hosting" : "Disconnect")) { if (hosting) rr_net_host_stop(); else rr_net_disconnect(); }
+        }
+        nk_layout_row_dynamic(ctx, 20, 1);
+        labelf(NK_TEXT_LEFT, "Status: %s", st);
+        nk_layout_row_dynamic(ctx, 28, 1);
+        if (nk_button_label(ctx, "Close")) dlg_open = false;
+    }
+    nk_end(ctx);
+}
+
 void rr_ui_draw(bool *quit)
 {
     if (quit_req) *quit = true;
+    /* GO armed a race: leave the menu so the player can coin up */
+    const bool sess = rr_net_session_active();
+    if (sess && !was_session) {
+        if (editing >= 0) { editing = -1; SDL_StopTextInput(); }
+        open_ = false; dlg_open = false;
+    }
+    was_session = sess;
     if (rr_ui_hint_active()) {
         hint_left--;
         int hw, hh; SDL_GetWindowSize(uwin, &hw, &hh);
@@ -304,7 +475,7 @@ void rr_ui_draw(bool *quit)
     /* THE MENU BAR across the top of the window, as in Prop Cycle. The chosen
      * page drops down under its title; on the keyboard the bar is the row
      * above the first row of the dropdown. */
-    static const float title_w[T_N] = { 50, 80, 70, 90, 80 };
+    static const float title_w[T_N] = { 50, 80, 70, 90, 80, 70 };
     float title_x[T_N], x = 4;
     for (int t = 0; t < T_N; t++) { title_x[t] = x; x += title_w[t] + 4; }
     if (nk_begin(ctx, "menubar", nk_rect(0, 0, (float)ww, 28), NK_WINDOW_NO_SCROLLBAR)) {
@@ -321,7 +492,7 @@ void rr_ui_draw(bool *quit)
     nk_end(ctx);
 
     /* the dropdown: sized to its page, under its title, inside the window */
-    static const float drop_w[T_N] = { 300, 440, 300, 340, 380 };
+    static const float drop_w[T_N] = { 300, 440, 300, 340, 380, 420 };
     const int n0 = nrows(tab);
     const float rh0 = tab == T_CONTROLS ? 20 : 26;
     float dh = 48 + n0 * (rh0 + 4) + (tab == T_DISPLAY ? 88 : tab == T_FILE ? 0 : 44);
@@ -387,10 +558,14 @@ void rr_ui_draw(bool *quit)
         } else if (tab == T_RECORD) {
             labelf(NK_TEXT_LEFT, "Records the cabinet inputs per frame to recordings/;");
             labelf(NK_TEXT_LEFT, "replay with rr --replay FILE. F9 toggles without the menu.");
+        } else if (tab == T_ONLINE) {
+            labelf(NK_TEXT_LEFT, "Address entry needs a keyboard.");
+            if (!rr_net_connected()) labelf(NK_TEXT_LEFT, "LAN: one player picks Host a LAN game, the others Find LAN games and Join. Or type a server host:port.");
         }
 
     }
     nk_end(ctx);
+    if (dlg_open) online_dialog(ww, wh);
 
     nk_sdl_render(NK_ANTI_ALIASING_ON);        /* scales window units to the drawable itself */
 }

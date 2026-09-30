@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "rr_mem.h"
+#include "rr_game.h"
 
 rr_sys_t g_rr;
 
@@ -78,9 +79,15 @@ void rd_ior_log(vaddr_t a, int size, uint32_t v);
 uint32_t rd_ior_serve(vaddr_t a, int size);
 void rd_read_byte(vaddr_t a, uint8_t *p);
 void rd_dict_byte(uint8_t v);
+#ifdef RR_TRACE
+void (*rr_read_probe)(vaddr_t, int);                  /* the trace oracle (engine/lift_env.c): sees every read */
+#endif
 uint32_t rr_read(vaddr_t a, int size)
 {
     uint32_t v = 0;
+#ifdef RR_TRACE
+    if (rr_read_probe) rr_read_probe(a, size);
+#endif
     if (rd_journal_on && s_io_r && !(a >= 0x70000000u && a < 0x70000000u + RR_POLY_WORDS * 4)) {
         uint32_t o_, l_; bool r_;
         if (!region(a, &o_, &l_, &r_)) {           /* an I/O read during a check (src/rd) */
@@ -131,9 +138,11 @@ void rr_write(vaddr_t a, int size, uint32_t v)
 #endif
     if (rd_journal_on && s_io_w && !(a >= 0x70000000u && a < 0x70000000u + RR_POLY_WORDS * 4)) {
         uint32_t o_, l_; bool r_;
-        /* syscon (0x40000000) is backed by memory but its writes have side effects
-         * (IRQ enables/acks, sound CPU hold/release, DSP control): an I/O write too */
-        if (!region(a, &o_, &l_, &r_) || (a >= 0x40000000u && a < 0x40000020u)) {
+        /* syscon (0x40000000) and the C139 SCI regs (0x20020000) are backed by memory
+         * but their writes have side effects (IRQ enables/acks, sound CPU hold/release,
+         * DSP control; SCI: TX capture/completion, the RX ring pointer): an I/O write too */
+        if (!region(a, &o_, &l_, &r_) || (a >= 0x40000000u && a < 0x40000020u)
+            || (a >= 0x20020000u && a < 0x20020010u)) {
             rd_io_log(a, size, v); return;                      /* src/rd: captured, replayed later */
         }
     }
@@ -155,7 +164,7 @@ void rr_write(vaddr_t a, int size, uint32_t v)
 bool rr_load_program(const char *dir)
 {
     /* MAME ROM_LOAD32_BYTE offsets: uub 0, umb 1, lmb 2, llb 3 */
-    static const char *lane[4] = { "rv2_prguub.6d", "rv2_prgumb.8d", "rv2_prglmb.2d", "rv2_prgllb.4d" };
+    const char *const *lane = g_rr_game->prg;
     for (int l = 0; l < 4; l++) {
         char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, lane[l]);
         FILE *f = fopen(p, "rb");

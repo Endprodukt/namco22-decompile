@@ -24,6 +24,7 @@ __pycache__/
 /raverace/rr_controls.cfg
 /raverace/screenshots/
 /raverace/recordings/
+/raverace/server/target/
 /tokyowar/build/
 /tokyowar/extracted/
 /tokyowar/tokyowar_main.bin

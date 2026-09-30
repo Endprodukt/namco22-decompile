@@ -19,6 +19,7 @@
 #include "m37710.h"
 #include "rr_mem.h"
 #include "rr_sound.h"
+#include "rr_game.h"
 #include "snd_board.h"
 
 m37710_t g_snd_cpu;
@@ -70,7 +71,7 @@ static bool slurp(const char *dir, const char *n, uint8_t *dst, size_t len)
 bool rr_sound_init(const char *dir)
 {
     g_snd_data = calloc(1, 0x80000);
-    if (!slurp(dir, "c74.bin", g_snd_bios, sizeof g_snd_bios) || !slurp(dir, "rv1data.6r", g_snd_data, 0x80000)) return false;
+    if (!slurp(dir, "c74.bin", g_snd_bios, sizeof g_snd_bios) || !slurp(dir, g_rr_game->snd_data, g_snd_data, 0x80000)) return false;
     m37710_init(&cpu, bus_r, bus_w, NULL);
     snd_executor_init();
     ready = true;

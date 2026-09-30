@@ -17,15 +17,20 @@
 #include <stdlib.h>
 #include "rr_mem.h"
 #include "rr_hw.h"
+#include "rr_game.h"
 #include "rr_dsp.h"
 #include "rr_sound.h"
+#include "rr_link.h"
 
 rr_hw_t g_hw;
 
 static FILE *keycus_replay;
+static int keycus_forced; static uint16_t keycus_forced_v;   /* the trace oracle (rr_env.c): the next read returns MAME's value */
+void rr_hw_keycus_force(uint32_t v) { keycus_forced = 1; keycus_forced_v = (uint16_t)v; }
 static uint16_t keycus_next(void)
 {
     unsigned v;
+    if (keycus_forced) { keycus_forced = 0; return g_hw.keycus_rng = keycus_forced_v; }
     if (keycus_replay && fscanf(keycus_replay, "%x", &v) == 1) return g_hw.keycus_rng = (uint16_t)v;
     uint16_t old = g_hw.keycus_rng;
     do { g_hw.lcg = g_hw.lcg * 1103515245u + 12345u; g_hw.keycus_rng = (uint16_t)(g_hw.lcg >> 16); }
@@ -43,7 +48,12 @@ static void irqlevel(int line, uint8_t data)
 
 static bool io_read(vaddr_t a, int size, uint32_t *out)
 {
-    if (a >= 0x20000000u && a < 0x20000010u) { *out = keycus_next(); return true; }
+    if (a >= 0x20000000u && a < 0x20000010u) {
+        const uint16_t r = keycus_next();                                  /* the random stream advances on every read, as in MAME */
+        *out = g_rr_game->keycus_off >= 0 && (int)((a & 0xF) >> 1) == g_rr_game->keycus_off ? g_rr_game->keycus_val : r;
+        return true;
+    }
+    if (a >= 0x20020000u && a < 0x20020010u) { *out = rr_link_reg_read(a - 0x20020000u, size); return true; }
     if (a >= 0x50000000u && a < 0x50000004u) {
         uint32_t d = g_hw.dsw;
         *out = size == 4 ? d : size == 2 ? (d >> ((a & 2) ? 0 : 16)) & 0xFFFF : (d >> ((3 - (a & 3)) * 8)) & 0xFF;
@@ -77,6 +87,7 @@ static bool io_write(vaddr_t a, int size, uint32_t v)
         return true;
     }
     if (a >= 0x20000000u && a < 0x20000010u) return true;        /* keycus_w: ignored */
+    if (a >= 0x20020000u && a < 0x20020010u) { rr_link_reg_write(a - 0x20020000u, size, v); return true; }
     if (a >= 0x50000000u && a < 0x50000004u) { g_hw.cpuleds = v; return true; }
     if (a >= 0x50000008u && a < 0x5000000Cu) { g_hw.portbits[(a >> 1) & 1] = 0xFFFF; return true; }
     if (a >= 0x60000000u && a < 0x60004000u) return true;
@@ -93,11 +104,13 @@ bool rr_hw_init(const char *rom_dir)
     g_hw.portbits[0] = g_hw.portbits[1] = 0xFFFF;
     g_hw.steer = 0x800; g_hw.gas = 0; g_hw.brake = 0; g_hw.inputs = 0xFEFF;   /* MAME default: active-low bits 1, cabinet field 0x2100 = 0x2000 (Standard) */
     char p[1024];
-    snprintf(p, sizeof p, "%s/rv1eeprm.9e", rom_dir);
-    FILE *f = fopen(p, "rb");
-    if (f) { if (fread(g_rr.eeprom, 1, RR_EEPROM_SIZE, f) != RR_EEPROM_SIZE) fprintf(stderr, "[HW] short eeprom\n"); fclose(f); }
+    snprintf(p, sizeof p, "%s/%s", rom_dir, g_rr_game->eeprom ? g_rr_game->eeprom : "");
+    FILE *f = g_rr_game->eeprom ? fopen(p, "rb") : NULL;
+    if (!g_rr_game->eeprom) { const char *fe = getenv("RR_EEPROM_FILL"); memset(g_rr.eeprom, fe ? (int)strtol(fe, NULL, 0) : 0xFF, RR_EEPROM_SIZE); }   /* no default image: a blank EEPROM (MAME: all ones) the game initialises itself */
+    else if (f) { if (fread(g_rr.eeprom, 1, RR_EEPROM_SIZE, f) != RR_EEPROM_SIZE) fprintf(stderr, "[HW] short eeprom\n"); fclose(f); }
     else fprintf(stderr, "[HW] no %s -- EEPROM blank\n", p);
     rr_set_io_hooks(io_read, io_write);
+    rr_link_init();                                     /* the C139 SCI link chip (cabinet network) */
     if (!rr_dsp_init(rom_dir)) fprintf(stderr, "[HW] master DSP unavailable\n");
     const char *kf = getenv("RR_KEYCUS_FILE");      /* replay MAME's random keycus reads */
     if (kf && !(keycus_replay = fopen(kf, "r"))) fprintf(stderr, "[HW] cannot open %s\n", kf);
@@ -110,21 +123,29 @@ static void shared_w16(uint32_t off, uint16_t v)
     g_rr.shared[off + 1] = (uint8_t)v;
 }
 
-void rr_hw_vblank(void)
+void rr_hw_drive_io(void)                            /* MAME handle_driving_io: the I/O board's answer in shared RAM */
 {
-    if (g_hw.mcu_run) {                              /* handle_driving_io */
+    if (g_hw.mcu_run) {
         shared_w16(0x30, g_hw.inputs);
-        shared_w16(0x32, (uint16_t)(g_hw.steer + 32));
-        shared_w16(0x34, (uint16_t)(g_hw.gas + 992));
-        shared_w16(0x36, (uint16_t)(g_hw.brake + 3008));
+        shared_w16(0x32, (uint16_t)(g_hw.steer + g_rr_game->steer_add));
+        shared_w16(0x34, (uint16_t)(g_hw.gas + g_rr_game->gas_add));
+        shared_w16(0x36, (uint16_t)(g_hw.brake + g_rr_game->brake_add));
         int coin = (g_hw.inputs & 0x1000) >> 12 | (g_hw.inputs & 0x0200) >> 8;
         if (!(coin & 1) && (g_hw.old_coin & 1)) g_hw.credits1++;
         if (!(coin & 2) && (g_hw.old_coin & 2)) g_hw.credits2++;
         g_hw.old_coin = coin;
         shared_w16(0x3A, (uint16_t)(g_hw.credits1 << 8 | g_hw.credits2));
     }
+}
+
+void rr_hw_vblank(void)
+{
+    rr_hw_drive_io();
     if (g_hw.irq_enabled & (1u << 4)) g_hw.irq_state |= 1u << 4;
 }
+
+/* syscon line 2 = the C139 SCI (cabinet link): level 6, autovector 0x26BBE */
+void rr_hw_sci_irq(void) { g_hw.irq_state |= 1u << 2; }
 
 /* the highest-priority pending, enabled IRQ as a 68K level (0 = none) */
 int rr_hw_irq_level(void)
@@ -211,6 +232,25 @@ void rr_hw_set_steering_motor(bool on)
     eeprom_block_set(0x2C0, 0x11, on ? 0 : 1);
     eeprom_block_set(0x2E0, 0x11, on ? 0 : 1);
     g_rr.wram[0x1071] = on ? 0 : 1;
+}
+
+/* CABINET NUMBER is group 3 (EEPROM 0x2C0, backup 0x2E0; WRAM 0x10001060) byte 0:
+ * rd_link_number (FUN_00026e24) reads it as & 7 for this cabinet's link id, and
+ * LATCHES it into the link state -- A6W(0x11A0) and its *2/*16/*64 offsets
+ * (0x1158/0x115A/0x115C; A6W(x) = WRAM 0x10008000+x) -- but only when the
+ * settings reload runs (boot, test-menu exit). A post-boot change (the online
+ * lobby's GO) must restate the latches itself or the game keeps staging the
+ * old id. */
+void rr_hw_set_link_cabinet(int n)
+{
+    n &= 7;
+    eeprom_block_set(0x2C0, 0, (uint8_t)n);
+    eeprom_block_set(0x2E0, 0, (uint8_t)n);
+    g_rr.wram[0x1060] = (uint8_t)n;
+    g_rr.wram[0x91A0] = 0; g_rr.wram[0x91A1] = (uint8_t)n;          /* A6W(0x11A0): the latch */
+    g_rr.wram[0x9158] = 0; g_rr.wram[0x9159] = (uint8_t)(n * 2);
+    g_rr.wram[0x915A] = 0; g_rr.wram[0x915B] = (uint8_t)(n * 16);
+    g_rr.wram[0x915C] = 0; g_rr.wram[0x915D] = (uint8_t)(n * 64);
 }
 
 /* MAME handle_driving_io: m_wheel_motor = shareram[0x40/2] & 0xff. The 68K writes it once a frame (0x00470E) from

@@ -9,7 +9,7 @@ where a MAME set has since renamed one (see [docs/ROM_CHECKSUMS.md](docs/ROM_CHE
 | Game | Year | Status | Game files you need | Linux | Windows |
 |---|---|---|---|---|---|
 | **Prop Cycle** | 1996 | Playable from start to finish, with sound | `propcycl.zip` | yes | yes |
-| **Rave Racer** | 1995 | Playable: races, with sound | `raverace.zip` + `namcoc74.zip` | yes | yes |
+| **Rave Racer** | 1995 | Playable: races, with sound, online play (LAN and internet) | `raverace.zip` + `namcoc74.zip` | yes | yes |
 | **Tokyo Wars** | 1996 | Playable: attract, play, sound, widescreen | `tokyowar.zip` | yes | yes |
 | **Dirt Dash** | 1995 | Playable: five stages, sound, widescreen | `dirtdash.zip` | yes | yes |
 
@@ -169,6 +169,23 @@ Building on Windows itself, and what in the code is there for Windows only:
 | `P` | Pause |
 | `Esc` | Menu |
 | `F12` | Take a picture |
+
+**Playing online (Rave Racer).** Up to eight players can race together, each on
+their own computer. Open the menu with `Esc` and go to the **Online** page,
+then **Host / join a game...**:
+
+- **Local LAN**: one player picks *Host a LAN game*; everyone else picks *Find
+  LAN games* and clicks the game it finds.
+- **Internet game**: type the address of a server (`host` or `host:port`, UDP
+  27750 by default) and *Connect*. Anyone can run such a server on a machine
+  that is always on: `raverace/server/` is a small Rust program for exactly
+  this (see its README; the wire protocol is `raverace/NETPLAY.md`).
+
+Everyone in the lobby then picks **Ready**, and anyone can start the race once
+all players are ready. When the race begins the game turns free play on for
+you and gives everyone a moment to step on the gas; choose your car and wait
+for the others at the course select. Your name on the Online page is what the
+other players see.
 
 **Tokyo Wars.** You command a tank in a city battle.
 

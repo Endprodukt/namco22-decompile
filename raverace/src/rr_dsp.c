@@ -20,6 +20,7 @@
 #include "c25_oracle.h"
 #endif
 #include "rr_dsp.h"
+#include "rr_game.h"
 #include "rr_video.h"
 #include "rr_scene.h"
 
@@ -52,15 +53,13 @@ static uint32_t seen_begins;
 
 static bool load_pointrom(const char *dir)
 {
-    static const char *pl[3][4] = {
-        {"rv1potl0.5b", "rv1potl1.4b", "rv1potl2.3b", "rv1potl3.2b"},
-        {"rv1potm0.5c", "rv1potm1.4c", "rv1potm2.3c", "rv1potm3.2c"},
-        {"rv1potu0.5d", "rv1potu1.4d", "rv1potu2.3d", "rv1potu3.2d"} };
-    const uint32_t chip = 0x80000, n = 4 * chip;
+    const char *const (*pl)[4] = g_rr_game->pot;
+    const int chips = g_rr_game->pot_chips;
+    const uint32_t chip = 0x80000, n = (uint32_t)chips * chip;
     uint8_t *b = malloc(3 * n);
     g_pointrom = malloc(n * sizeof *g_pointrom);
     for (int p = 0; p < 3; p++)
-        for (int c = 0; c < 4; c++) {
+        for (int c = 0; c < chips; c++) {
             char path[1024];
             snprintf(path, sizeof path, "%s/%s", dir, pl[p][c]);
             FILE *f = fopen(path, "rb");
@@ -96,7 +95,7 @@ bool rr_dsp_init(const char *dir)
     /* THE PROGRAM: translated to C at build time (gen/rr_c25.c). The oracle
      * builds can run the interpreter instead (RR_C25=oracle) -- the gate. */
     { extern bool rr_c25_exec(c71_t *, int); m->xlat = rr_c25_exec; }
-    m->spin_pc = 0x452D; m->spin_op = 0x2000;    /* the master's LAC *0 / BNEZ poll (~44.9M of ~54M retired steps in attract) */
+    m->spin_pc = g_rr_game->spin_pc; m->spin_op = g_rr_game->spin_op;    /* the master's LAC *0 / BNEZ poll (~44.9M of ~54M retired steps in attract) */
 #ifdef RR_ORACLE
     { const char *e = getenv("RR_C25"); if (e && !strcmp(e, "oracle")) { c25_oracle_use(m); fprintf(stderr, "[DSP] master program: the interpreter ORACLE\n"); } }
 #endif

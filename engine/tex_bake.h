@@ -19,10 +19,12 @@ GLuint bake_quad_texture(int min_u, int min_v, int range_u, int range_v,
                          int texbank, int pal_group, int cmode,
                          float *out_su, float *out_sv, float *out_ou, float *out_ov);
 
-/* The atlas (engine/tex_bake.c) calls this before overwriting page pixels, so a
- * renderer with buffered quads (engine/quad_gl.c's batch) draws them first. */
-void tex_bake_set_flush_hook(void (*f)(void));
+/* The atlas (engine/tex_bake.c) calls this with the page's texture before writing
+ * that page's shadow, so a renderer with buffered quads (engine/quad_gl.c's batch)
+ * can draw them first if they reference that page. */
+void tex_bake_set_flush_hook(void (*f)(GLuint page_tex));
 int  tex_bake_atlas_active(void);
+GLuint tex_bake_white_tex(void);        /* an atlas page whose texel (0,0) is permanently white (solid quads sample it) */
 void tex_bake_commit(GLuint tex);   /* upload tex's atlas page if bakes dirtied it since its last use */
 
 extern int    g_tex_opaque;       /* 1 = no pen-0 keying (hardware polygon path) */

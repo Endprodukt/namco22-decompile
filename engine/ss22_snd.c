@@ -124,7 +124,10 @@ static uint8_t bus_r(void *u, uint32_t a)
 static void bus_w(void *u, uint32_t a, uint8_t v)
 {
     (void)u;
-    if (a >= 0x004000 && a < 0x00C000) { g_ss22.shared[(a - 0x4000) ^ 1] = v; return; }
+    if (a >= 0x004000 && a < 0x00C000) {
+        extern int g_ss22_mbox; if (g_ss22_mbox && (a == 0xBD00 || a == 0xBD01)) { extern uint32_t rr_frame; extern void ss22_mbox_note(uint32_t, uint32_t, uint8_t); ss22_mbox_note(rr_frame, a, v); }
+        g_ss22.shared[(a - 0x4000) ^ 1] = v; return;
+    }
     if (a >= 0x002000 && a < 0x003000) {
         unsigned off = a - 0x2000;
         c352sh[off] = v;
@@ -172,11 +175,14 @@ static void port_w(void *u, unsigned reg, uint8_t v)
 }
 
 /* ---- lifecycle ---------------------------------------------------------------------------------------- */
-static bool slurp(const char *dir, const char *n, uint8_t *dst, size_t len)
+static bool slurp_part(const char *dir, const char *n, uint8_t *dst, size_t len, bool short_ok);
+static bool slurp(const char *dir, const char *n, uint8_t *dst, size_t len) { return slurp_part(dir, n, dst, len, false); }
+static bool slurp_part(const char *dir, const char *n, uint8_t *dst, size_t len, bool short_ok)
 {
     char p[1024]; snprintf(p, sizeof p, "%s/%s", dir, n);
     FILE *f = fopen(p, "rb");
-    bool ok = f && fread(dst, 1, len, f) == len;
+    size_t got = f ? fread(dst, 1, len, f) : 0;      /* a wave chip may be smaller than its 4 MB slot (a game's second wave chip may be 2 MB); the rest stays zero */
+    bool ok = f && (got == len || (short_ok && got > 0));
     if (f) fclose(f);
     if (!ok) fprintf(stderr, "[SND] cannot read %s\n", p);
     return ok;
@@ -189,8 +195,8 @@ bool ss22_snd_init(const char *dir)
     rom = calloc(1, 0x80000);
     wave = calloc(1, c->wave_size);
     if (!rom || !wave || !slurp(dir, c->rom, rom, 0x80000)) return false;
-    chip_ok = slurp(dir, c->wave[0], wave + c->wave_off[0], 0x400000);
-    if (chip_ok && c->wave[1]) chip_ok = slurp(dir, c->wave[1], wave + c->wave_off[1], 0x400000);
+    chip_ok = slurp_part(dir, c->wave[0], wave + c->wave_off[0], 0x400000, true);
+    if (chip_ok && c->wave[1]) chip_ok = slurp_part(dir, c->wave[1], wave + c->wave_off[1], 0x400000, true);
     if (chip_ok) { c352_init(&chip, wave, c->wave_size); c352_reset(&chip); }
     m37710_init(&cpu, bus_r, bus_w, NULL);
     cpu.port_r = port_r; cpu.port_w = port_w;
@@ -254,6 +260,14 @@ static void raise_due_pins(void)
 
 static uint64_t next_pin_time(void) { return (uint64_t)pin_time_n(pin_n); }
 
+/* the 68K is polling a shared-RAM word: let the MCU run ahead a little so a pulse it raises and clears inside one slice is seen.
+ * Cycle-neutral: the overrun is borrowed from the next slice (see ss22_snd_slice). */
+void ss22_snd_poll(void)
+{
+    if (!ready || !running || cpu.unimpl_hit) return;
+    raise_due_pins();
+    snd_run(&cpu, 64);
+}
 void ss22_snd_slice(void)
 {
     if (!ready) return;
