@@ -40,7 +40,10 @@ static int service_frames;
  *   joy_brake = <axis>[ invert][ positive|negative]
  *
  * A Controls-menu bind records the SDL GUID too, so a separate USB pedal set
- * is not confused with the wheel base. "positive"/"negative" is learnt from
+ * is not confused with the wheel base, and the device's axis and button counts
+ * (joy_<axis>_shape = A<axes>B<buttons>): one wheel can be several devices
+ * under one GUID -- a Fanatec DD base is two "FANATEC Wheel"s (12 axes / 63
+ * buttons and 8 axes / 108 buttons), and the first match need not be the one bound. "positive"/"negative" is learnt from
  * the direction in which the pedal moved while binding.
  */
 typedef struct {
@@ -48,6 +51,7 @@ typedef struct {
     bool invert;
     int direction;                              /* 0 auto, +1 pressed raises value, -1 lowers it */
     char guid[40];                              /* SDL GUID string; empty = first raw device */
+    int shape_axes, shape_buttons;              /* the bound device's axis and button counts (0 = not recorded: the first GUID match) */
 } raw_axis_bind;
 
 typedef struct {
@@ -78,6 +82,7 @@ static bool cap_valid[MAX_DEV][MAX_CAP_AXES];
 
 static const char *axis_cfg_name(int k) { return k == 0 ? "joy_steer" : k == 1 ? "joy_gas" : "joy_brake"; }
 static const char *guid_cfg_name(int k) { return k == 0 ? "joy_steer_guid" : k == 1 ? "joy_gas_guid" : "joy_brake_guid"; }
+static const char *shape_cfg_name(int k) { return k == 0 ? "joy_steer_shape" : k == 1 ? "joy_gas_shape" : "joy_brake_shape"; }
 static raw_axis_bind *axis_bind(int k) { return k == 0 ? &joy_steer : k == 1 ? &joy_gas : &joy_brake; }
 
 static void parse_axis(raw_axis_bind *b, const char *key, int def_axis)
@@ -97,6 +102,8 @@ static void raw_bindings_load(void)
         raw_axis_bind *b = axis_bind(k);
         const char *g = eng_cfg_get(guid_cfg_name(k));
         snprintf(b->guid, sizeof b->guid, "%s", g ? g : "");
+        const char *sh = eng_cfg_get(shape_cfg_name(k));
+        if (!sh || sscanf(sh, "A%dB%d", &b->shape_axes, &b->shape_buttons) != 2) b->shape_axes = b->shape_buttons = 0;
     }
     for (int a = 0; a < MAX_ACTIONS; a++) joy_button[a] = -1;
     for (int a = 0; a < game->n && a < MAX_ACTIONS; a++) {
@@ -121,6 +128,8 @@ static void raw_bind_save(int kind)
              b->direction > 0 ? " positive" : b->direction < 0 ? " negative" : "");
     eng_cfg_set(axis_cfg_name(kind), v);
     eng_cfg_set(guid_cfg_name(kind), b->guid);
+    snprintf(v, sizeof v, "A%dB%d", b->shape_axes, b->shape_buttons);
+    eng_cfg_set(shape_cfg_name(kind), v);
 }
 
 /* ---- keyboard bindings --------------------------------------------------- */
@@ -237,7 +246,9 @@ static int raw_slot_for(const raw_axis_bind *b)
 {
     if (b->guid[0]) {
         for (int i = 0; i < MAX_DEV; i++)
-            if (raws[i].js && !strcmp(raws[i].guid, b->guid)) return i;
+            if (raws[i].js && !strcmp(raws[i].guid, b->guid) &&
+                (!b->shape_axes || (SDL_JoystickNumAxes(raws[i].js) == b->shape_axes &&
+                                    SDL_JoystickNumButtons(raws[i].js) == b->shape_buttons))) return i;
         return -1;
     }
     for (int i = 0; i < MAX_DEV; i++) if (raws[i].js) return i;
@@ -500,6 +511,8 @@ static bool capture_input(const SDL_Event *e, void *u)
          (game->actions[rebinding].axis == SS22_AX_WHEEL_RIGHT && delta < 0));
     b->direction = axis_capture == 0 ? 0 : (delta > 0 ? +1 : -1);
     snprintf(b->guid, sizeof b->guid, "%s", raws[d].guid);
+    b->shape_axes = SDL_JoystickNumAxes(raws[d].js);
+    b->shape_buttons = SDL_JoystickNumButtons(raws[d].js);
     raw_bind_save(axis_capture);
     if (axis_capture == 1) memset(&gas_cal, 0, sizeof gas_cal);
     if (axis_capture == 2) memset(&brake_cal, 0, sizeof brake_cal);
