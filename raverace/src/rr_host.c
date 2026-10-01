@@ -187,6 +187,12 @@ void rr_host_set_draw(int level)
     fprintf(stderr, "[HOST] draw distance: %s\n", draw_label[g_cfg_draw]);
 }
 
+void rr_host_set_hud_edges(int on)
+{
+    extern int g_eng_hud_edges_on;
+    g_eng_hud_edges_on = on != 0; save_opt("wide_hud", on ? "1" : "0");
+}
+
 void rr_host_set_wide(int on)
 {
     g_cfg_wide = on != 0; save_opt("widescreen", g_cfg_wide ? "1" : "0");

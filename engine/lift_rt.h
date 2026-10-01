@@ -75,12 +75,13 @@ static inline uint64_t SBORROW(uint64_t a, uint64_t b, int sz) {
 }
 
 void rr_trap(uint32_t at, uint32_t target, const char *what);
+void rr_div0(const char *what);   /* the 68K takes vector 5 (a game restarts there, or the ROM has a bare rte): counted and reported, execution goes on with 0 */
 static inline uint64_t UDIVREM(uint64_t a, uint64_t b, char op) {
-    if (!b) { rr_trap(0, 0, "unsigned divide by zero"); return 0; }
+    if (!b) { rr_div0("unsigned divide by zero"); return 0; }
     return op == '/' ? a / b : a % b;
 }
 static inline int64_t SDIVREM(int64_t a, int64_t b, char op) {
-    if (!b) { rr_trap(0, 0, "signed divide by zero"); return 0; }
+    if (!b) { rr_div0("signed divide by zero"); return 0; }
     if (b == -1) return op == '/' ? -a : 0;
     return op == '/' ? a / b : a % b;
 }

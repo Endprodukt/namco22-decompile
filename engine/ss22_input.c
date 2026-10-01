@@ -583,15 +583,57 @@ static bool raw_pedal_value(raw_axis_bind *b, pedal_cal *cal, int *out)
     return true;
 }
 
+/* ---- the light gun: where it points, from the mouse, the right stick or the arrow keys ------------------------------------------ */
+#include "ss22_board.h"
+#include "ss22_host.h"
+static float aim_x = 0.5f, aim_y = 0.5f;
+static bool  aim_on;                                    /* the crosshair is on the picture */
+static int   aim_src;                                   /* 0 none yet, 1 mouse, 2 stick / keys */
+bool ss22_input_aim(float *nx, float *ny) { if (!game || !game->light_gun || !aim_on) return false; *nx = aim_x; *ny = aim_y; return true; }
+static float clamp01(float v) { return v < 0 ? 0 : v > 1 ? 1 : v; }
+static void aim_update(const uint8_t *k)
+{
+    static int last_mx = -1, last_my = -1;
+    int mx, my; const uint32_t mb_now = SDL_GetMouseState(&mx, &my);
+    float px, py; bool inside;
+    const bool have = ss22_host_pointer(&px, &py, &inside);
+    if (have && (mx != last_mx || my != last_my)) { aim_src = 1; last_mx = mx; last_my = my; }
+    float dx = 0, dy = 0;                               /* the stick and the arrow keys move the crosshair (a full deflection crosses the picture in ~1 s) */
+    for (int i = 0; i < MAX_DEV; i++) {
+        SDL_GameController *c = pads[i].gc; if (!c) continue;
+        const int rx = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX), ry = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY);
+        if (abs(rx) > PAD_DEADZONE) dx += rx / 32767.0f;
+        if (abs(ry) > PAD_DEADZONE) dy += ry / 32767.0f;
+    }
+    if (k[SDL_SCANCODE_LEFT])  dx -= 1; if (k[SDL_SCANCODE_RIGHT]) dx += 1;
+    if (k[SDL_SCANCODE_UP])    dy -= 1; if (k[SDL_SCANCODE_DOWN])  dy += 1;
+    if (dx != 0 || dy != 0) {
+        if (aim_src == 1 && have) { aim_x = clamp01(px); aim_y = clamp01(py); }   /* start from where the mouse was */
+        aim_src = 2; aim_on = true;
+        aim_x = clamp01(aim_x + dx * 0.018f); aim_y = clamp01(aim_y + dy * 0.024f);
+    } else if (aim_src == 1) {
+        aim_on = have && inside;                        /* the pointer left the picture: the gun is off-screen (a reload shot) */
+        if (have) { aim_x = clamp01(px); aim_y = clamp01(py); }
+    } else if (aim_src == 0) aim_on = false;
+    if ((mb_now & SDL_BUTTON_X1MASK) || k[SDL_SCANCODE_R]) aim_on = false;     /* an "aim off-screen" button / key (a reload without moving the gun) */
+    g_ss22_gun_off = !aim_on;
+    g_ss22_gun_x = (uint16_t)(68 + aim_x * 626);        /* the cabinet's port ranges (engine/ss22_board.h) */
+    g_ss22_gun_y = (uint16_t)(43 + aim_y * 241);
+    { static int dbg = -1, n; if (dbg < 0) dbg = getenv("SS22_AIMDBG") != NULL;       /* SS22_AIMDBG=1: the aim, once a second */
+      if (dbg && ++n % 60 == 0) fprintf(stderr, "[AIM] src %d on %d  norm %.3f,%.3f  port %u,%u  buttons 0x%X\n", aim_src, aim_on, aim_x, aim_y, g_ss22_gun_x, g_ss22_gun_y, SDL_GetMouseState(NULL, NULL)); } 
+}
+
 void ss22_input_update(void)
 {
     const uint8_t *k = SDL_GetKeyboardState(NULL);
     uint16_t p = 0;
     int left = 0, right = 0, pk[2] = { 0, 0 };
+    const uint32_t mb = game->light_gun ? SDL_GetMouseState(NULL, NULL) : 0;
+    if (game->light_gun) aim_update(k);
 
     for (int a = 0; a < game->n; a++) {
         const ss22_action *ac = &game->actions[a];
-        const bool held = key_held(k, a) || raw_button_held(a);
+        const bool held = key_held(k, a) || raw_button_held(a) || (ac->mouse && (mb & ac->mouse));
         if (ac->bit && ac->bit == game->test_bit) {
             if (held && !test_prev[a]) { test_latch = !test_latch; fprintf(stderr, "[INPUT] test switch %s\n", test_latch ? "ON" : "OFF"); }
             test_prev[a] = held;

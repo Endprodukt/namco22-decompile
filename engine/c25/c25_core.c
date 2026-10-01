@@ -19,7 +19,7 @@ bool c71_step(c71_t *d)
 {
     /* interrupts at the instruction boundary, in TMS32025 priority order:
      * INT0 2, INT1 4, INT2 6, TINT 0x18, RINT 0x1A, XINT 0x1C */
-    if (!d->intm) {
+    if (!d->intm && !d->rpt) {          /* RPT/RPTK and the instruction it repeats are one unit: no interrupt lands between them (measured: ~1 slice in 18000 on one game) */
         if (d->tint_pend) d->ifr |= 8;
         /* the scan only acts on a bit set in BOTH ifr and imr, so one mask test
          * short-circuits it (games park permanently-pending MASKED bits in ifr) */

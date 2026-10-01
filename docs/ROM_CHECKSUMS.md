@@ -19,7 +19,7 @@ Get-FileHash -Algorithm MD5 *
 (or `certutil -hashfile <file> MD5` for one file), and compare with the table. The **CRC32** column is the one MAME's own
 ROM lists show.
 
-Rave Racer's `c74.bin` (the sound chip's BIOS) comes from `namcoc74.zip`. The DSP's BIOS, `c71.bin` (MAME's `namcoc71`), is built into all four games and
+Rave Racer's `c74.bin` (the sound chip's BIOS) comes from `namcoc74.zip`. The DSP's BIOS, `c71.bin` (MAME's `namcoc71`), is built into all five games and
 is not needed; if you have it, its MD5 is `223914888d9be9ffe07952d9aa4c4107` (CRC32 `47c623ab`).
 
 ## Prop Cycle
@@ -172,3 +172,41 @@ MAME set: `dirtdash` (World, DT2 Ver.A, MAME's `dirtdasha`). Unpacked chips end 
 | `dt1waveb.1l` | 4194304 | `1280e17788bfcf83c6e5bf125f37a4a6` | `6b736f94` |
 | `dt2vera.1` | 2097152 | `4fbb2b5ead26717087ac638e0d57aee1` | `402a3d73` |
 | `dt2vera.2` | 2097152 | `3ca9ef45fb4e0663b2d15040dcd7e9d2` | `66ed140d` |
+
+## Time Crisis
+
+MAME set: `timecris` (World, TS2 Ver.B). Unpacked chips end up in `timecris/extracted/`. 31 files.
+
+| File | Size | MD5 | CRC32 |
+|---|---:|---|---|
+| `ts1ccrh.1d` | 524288 | `b7361fceb8032178d7c9bb5f66836a6d` | `a1cc3741` |
+| `ts1ccrl.3d` | 2097152 | `5de5b2e6c5d76bf1c6d2a8fe47686887` | `56cad2df` |
+| `ts1cg0.8d` | 2097152 | `262f35748078b6595dc7e956f26917e1` | `de07b22c` |
+| `ts1cg1.10d` | 2097152 | `c4baee28395da3b1d3cf9fa6b67b1bd5` | `992d26f6` |
+| `ts1cg2.12d` | 2097152 | `195e5de3ae6ac3a9d328bc77828933bd` | `6273954f` |
+| `ts1cg3.13d` | 2097152 | `836d56de3db96cfcfbdac67a7fd1db2e` | `38171f24` |
+| `ts1cg4.14d` | 2097152 | `655063f241c7f3d4dc007f370c1c1c85` | `51f09856` |
+| `ts1cg5.16d` | 2097152 | `1c920eea8d0c6b6690760db69191b226` | `4cd9fd79` |
+| `ts1cg6.18d` | 2097152 | `be4859f31e72d909a69ce98e1f8c4612` | `f17f2ec9` |
+| `ts1data.8k` | 524288 | `f3da24336095ab2314f7b865c38acfd1` | `e68aa973` |
+| `ts1ptrl0.18k` | 524288 | `6a3f5a92d0cbe6f2356d9e78a54e59ce` | `e5f2d275` |
+| `ts1ptrl1.16k` | 524288 | `f0a45a495350d157d635e1dd2cdebe06` | `2bba3800` |
+| `ts1ptrl2.15k` | 524288 | `139bcbf1623ed20099b55d6f432ed03c` | `d4441c08` |
+| `ts1ptrm0.18j` | 524288 | `b2c0603a4ca77b2200c04429e3900b94` | `8aea02ba` |
+| `ts1ptrm1.16j` | 524288 | `49345ef3915d0c57e069fd63035b80f0` | `bccf19bc` |
+| `ts1ptrm2.15j` | 524288 | `03acc19a71dcd6e34985a3343fbaa435` | `7280be31` |
+| `ts1ptru0.18f` | 524288 | `5bce3e37a27ac9a6d7bd5bf85b615b5e` | `c30d6332` |
+| `ts1ptru1.16f` | 524288 | `f1382f97c76434f6dde2c896389a7b82` | `993cde84` |
+| `ts1ptru2.15f` | 524288 | `830cf203aba845f2d21c7d8412255524` | `7cb25c73` |
+| `ts1scg0.12f` | 2097152 | `e9dc10ef2b3dbc6ed1e9cc6690890906` | `14a3674d` |
+| `ts1scg1.10f` | 2097152 | `eba66d3ffa2b08deb1828fc2981c83ad` | `11791dbf` |
+| `ts1scg2.8f` | 2097152 | `1b21d707ec62ff0be909add851f5e16a` | `d630fff9` |
+| `ts1scg3.7f` | 2097152 | `bbe6e72aa658b77925b6a476fd086f0b` | `1a62f015` |
+| `ts1scg4.5f` | 2097152 | `ff61f50c457c1830a4ce5def9361bc67` | `511b8dd6` |
+| `ts1scg5.3f` | 2097152 | `98b3615f7613b15fcfe8a6baabfc5fd4` | `553bb246` |
+| `ts1wavea.2l` | 4194304 | `e8ed56dafba5716a4adac46e68df4d8e` | `d1123301` |
+| `ts1waveb.1l` | 2097152 | `77a80c8a938bc08c8a80f141cde540c4` | `bf4d7272` |
+| `ts2verb.1` | 1048576 | `5d9efdf70acfb2eb4d8b6a2dca24afb3` | `29b377f7` |
+| `ts2verb.2` | 1048576 | `3b849adff914dd1d6eca3ee103cc7e90` | `79512e25` |
+| `ts2verb.3` | 1048576 | `140924f0d62359b0fe1f47999a82f8f5` | `9f4ced33` |
+| `ts2verb.4` | 1048576 | `0cbfc47b60ccbdbcf34743fb82b4a054` | `3e0cfb38` |

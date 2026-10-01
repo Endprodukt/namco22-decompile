@@ -4,4 +4,5 @@ Put the MAME ROM sets in this folder, still zipped:
   Rave Racer   raverace.zip  and  namcoc74.zip  (the sound chip's BIOS)
   Tokyo Wars   tokyowar.zip
   Dirt Dash    dirtdash.zip
+  Time Crisis  timecris.zip
 

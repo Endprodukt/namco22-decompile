@@ -243,11 +243,21 @@ static void dump_state(void)
     dump_video_state();
 }
 
+void rr_shadow_prune(void);
 void rr_tick(void)
 {
+    if (g_ss22_game->prune_shadow) rr_shadow_prune();
+#ifdef RR_TRACE
+    { static unsigned lastf; static long same; extern uint32_t rr_trace_pc; extern int rr_in_irq;
+      if (rr_frame == lastf) { if (++same % 100000 == 0) fprintf(stderr, "[RR] no new frame after %ld slices: frame %u pc %06X in_irq %d slice %ld vblank_slices %ld sr %04X\n", same, rr_frame, rr_trace_pc, rr_in_irq, slice, (long)vblank_slices, rr_get_sr()); } else { lastf = rr_frame; same = 0; } }
+#endif
     rd_budget_out();
     rr_budget = polls_per_frame / SLICES;
-    if (rr_in_irq) { rr_budget = 1000; return; }        /* finish the handler first */
+    if (rr_in_irq && ((rr_get_sr() >> 8) & 7) != 0) {    /* finish the handler first -- while its interrupt mask is still up: a handler that jumps out (a test-mode watchdog that restarts the program from inside the handler) and then lowers the mask to 0 is no longer one */
+#ifdef RR_TRACE
+        { static long stuck; extern uint32_t rr_trace_pc; extern void rr_dump_shadow(void); if (++stuck % 200000 == 0) { fprintf(stderr, "[RR] still inside an interrupt handler after %ld slices: pc %06X, frame %u\n", stuck, rr_trace_pc, rr_frame); rr_dump_shadow(); } }
+#endif
+        rr_budget = 1000; return; }
     g_ss22_in_vblank = vblank_slices > 0;
     if (vblank_slices > 0) {                            /* VTOTAL 525, VBSTART 480: the vblank is the first 45/525 of a frame after the */
         long full = dsp_steps_per_frame / SLICES;       /* screen update, ~1.37 of our slices; split the slice at VBEND. The master answers */
@@ -362,8 +372,10 @@ int ss22_main(int argc, char **argv, const ss22_game *g)
     eng_win_startup(g->logname);                        /* Windows: the program's own folder, a log file, real pixel sizes */
     snprintf(cfgfile, sizeof cfgfile, "%s_controls.cfg", g->lname);
     snprintf(nvfile, sizeof nvfile, "%s_eeprom.nv", g->lname);
+    extern bool ss22_input_aim(float *, float *);
     host_game = (ss22_host_game){ g->name, cfgfile, g->tag, g->lname, in_init, ss22_input_page, ss22_input_event, in_update,
-                                  ss22_input_neutral, ss22_snd_set_output, g->out_gain };
+                                  ss22_input_neutral, ss22_snd_set_output, g->out_gain,
+                                  g->input && g->input->light_gun ? ss22_input_aim : NULL };
     const char *rom_dir = "extracted";
     const char *rd_dir = NULL, *rd_out = NULL; int rd_frame = 0, frames_given = 0;
     if (argc == 1) win_scale = -1;                      /* started with no arguments (a double-click, the Windows how-to): play, in a window */

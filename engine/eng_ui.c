@@ -57,12 +57,13 @@ static void file_change(int r, int dir)
 static const eng_ui_page page_file = { "File", 220, 0, 0, file_n, file_val, NULL, file_text, file_change, NULL };
 
 /* ---- Display: the choices of engine/eng_display.h ------------------------------ */
-enum { D_WIDE, D_MODE, D_SIZE, D_RES, D_ASPECT, D_SCALING, D_N };
+enum { D_WIDE, D_MODE, D_SIZE, D_RES, D_ASPECT, D_SCALING, D_HUD, D_N };
 static int disp_n(void) { return D_N; }
 static bool disp_enabled(int r)
 {
     if (r == D_SIZE) return g_eng_disp.winmode == 0;
     if (r == D_ASPECT) return !g_eng_disp.wide;
+    if (r == D_HUD) return g_eng_disp.wide;
     return true;
 }
 static void disp_text(int r, char *l, size_t ln, char *v, size_t vn)
@@ -76,6 +77,7 @@ static void disp_text(int r, char *l, size_t ln, char *v, size_t vn)
     case D_RES:     snprintf(l, ln, "Resolution"); eng_disp_res_label(g_eng_disp.res_w, g_eng_disp.res_h, v, vn); break;
     case D_ASPECT:  snprintf(l, ln, "Aspect ratio"); snprintf(v, vn, "%s", eng_disp_aspect_name(g_eng_disp.aspect)); break;
     case D_SCALING: snprintf(l, ln, "Scaling"); snprintf(v, vn, "%s", eng_disp_scaling_name(g_eng_disp.scaling)); break;
+    case D_HUD:     snprintf(l, ln, "Widescreen HUD"); snprintf(v, vn, "%s", g_eng_disp.hud_edges ? "at the screen edges" : "original (4:3 centre)"); break;
     }
 }
 static void disp_change(int r, int dir)
@@ -94,6 +96,7 @@ static void disp_change(int r, int dir)
         break; }
     case D_ASPECT:  eng_disp_set_aspect(cyc(g_eng_disp.aspect, d, 4)); break;
     case D_SCALING: eng_disp_set_scaling(cyc(g_eng_disp.scaling, d, 3)); break;
+    case D_HUD:     eng_disp_set_hud_edges(!g_eng_disp.hud_edges); break;
     }
 }
 static void labelf(nk_flags align, const char *fmt, ...)

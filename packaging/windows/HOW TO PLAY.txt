@@ -1,13 +1,14 @@
-PROP CYCLE, RAVE RACER, TOKYO WARS and DIRT DASH
-================================================
+PROP CYCLE, RAVE RACER, TOKYO WARS, DIRT DASH and TIME CRISIS
+==============================================================
 
 1. Put the MAME ROM sets into the "roms" folder (don't unzip them):
      Prop Cycle   propcycl.zip
      Rave Racer   raverace.zip  and  namcoc74.zip
      Tokyo Wars   tokyowar.zip
      Dirt Dash    dirtdash.zip
+     Time Crisis  timecris.zip
 
-2. Double-click PropCycle.exe, RaveRacer.exe, TokyoWars.exe or DirtDash.exe.
+2. Double-click PropCycle.exe, RaveRacer.exe, TokyoWars.exe, DirtDash.exe or TimeCrisis.exe.
 
 That's it. The first start takes a few seconds while it unpacks the ROMs.
 Nothing needs installing. Keep the "mesa" folder beside PropCycle.exe: it is
@@ -40,6 +41,15 @@ KEYS -- TOKYO WARS
                 Audio (volume), Controls (rebind the keys)
   F11           fullscreen              F12        screenshot
 
+KEYS -- TIME CRISIS
+-------------------
+  The MOUSE is the gun: move it to aim.        Left button   shoot (also starts the game)
+  Right button / Z   the foot pedal: step out of cover to attack, step back, reload
+  5   insert a coin (a game costs three)       9 service       F2 the operator's test switch
+  Esc menu     F8   a white border round the picture (some light guns need it)     F11 fullscreen
+  A light gun that acts as an absolute mouse (Sinden, Gun4IR, OpenFIRE, Reaper, AimTrak) works as is: shoot just OUTSIDE the
+  screen (or hold R / the gun's side button) to reload. Arrow keys / a pad's right stick aim too.
+
 KEYS -- DIRT DASH
 -----------------
   5             insert a coin (a game costs two)     C          select (view change / confirm)
@@ -65,7 +75,7 @@ PROBLEMS?
 "Windows protected your PC"     Click "More info", then "Run anyway".
                                 (The games are not signed.)
 
-Slow or stuttering              Open the game's log (raveracer.log, tokyowars.log, dirtdash.log,
+Slow or stuttering              Open the game's log (raveracer.log, tokyowars.log, dirtdash.log, timecris.log,
                                 propcycl.log beside the .exe). The line "[HOST] OpenGL: ..." says which
                                 graphics chip is used: on a laptop with two of them it must be the
                                 fast one (NVIDIA / AMD card). If not, set it by hand: Windows Settings >
@@ -79,7 +89,7 @@ Black screen or won't start     Update your graphics driver. In a virtual
                                 PropCycle.exe.
 
 Something else                  Each game writes a log beside it, from its
-                                last start: propcycl.log / raveracer.log / tokyowar.log / dirtdash.log.
+                                last start: propcycl.log / raveracer.log / tokyowar.log / dirtdash.log / timecris.log.
                                 It says what went wrong.
 
 Keep the folder somewhere you can write to (Downloads, Desktop, Documents --

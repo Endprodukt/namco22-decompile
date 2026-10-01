@@ -23,13 +23,37 @@ int rr_in_irq;
 uint32_t rr_n_irq[8];
 
 void rd_budget_out(void);   /* src/rd: unwind a checker probe (budget ran out, or it trapped) */
+unsigned rr_n_div0;
+#ifdef RR_TRACE
+extern uint32_t rr_trace_pc;
+#endif
+void rr_div0(const char *what)
+{
+    extern int rd_quiet; if (rd_quiet) return;
+    if (++rr_n_div0 <= 3) {
+#ifdef RR_TRACE
+        extern uint32_t rr_trace_pc;
+        fprintf(stderr, "[RR] f%u: %s at instruction %06X (the 68K takes vector 5); continuing with 0\n", rr_frame, what, rr_trace_pc);
+#else
+        fprintf(stderr, "[RR] f%u: %s (the 68K takes vector 5); continuing with 0\n", rr_frame, what);
+#endif
+    }
+}
+
 void rr_trap(uint32_t at, uint32_t target, const char *what)
 {
     rd_budget_out();                                 /* a probe's mutated state trapped: abandon the probe */
     { extern int rd_quiet; if (rd_quiet) return; }   /* a fuzz probe's mutated state (src/rd), not the game */
     rr_n_traps++;
-    if (rr_n_traps <= 40)
+    if (rr_n_traps <= 40) {
+#ifdef RR_TRACE
+        extern uint32_t rr_trace_pc;                 /* the instruction that raised it (a divide trap has no `at`) */
+        fprintf(stderr, "[TRAP] f%u at 0x%06X -> 0x%08X: %s%s", rr_frame, at, target, what, "");
+        fprintf(stderr, " (instruction %06X)\n", rr_trace_pc);
+#else
         fprintf(stderr, "[TRAP] f%u at 0x%06X -> 0x%08X: %s\n", rr_frame, at, target, what);
+#endif
+    }
     if (rr_n_traps == 40) fprintf(stderr, "[TRAP] (further traps counted, not printed)\n");
 }
 
@@ -45,6 +69,8 @@ void rr_trace_ins(uint32_t pc)
 {
     if (rr_trace_hook) rr_trace_hook(pc);
     rr_trace_pc = pc;
+    { static int ps = -1; static uint64_t cnt; if (ps < 0) ps = getenv("RR_PCSAMPLE") != NULL;      /* RR_PCSAMPLE=1: the PC every 20M instructions (what is a slow run spinning on?) */
+      if (ps && ++cnt % 20000000 == 0) { extern int rr_in_irq; extern void rr_dump_shadow(void); fprintf(stderr, "[PCSAMPLE] f%u %06X in_irq %d\n", rr_frame, pc, rr_in_irq); if (pc == 0x11444 || pc == 0x94EE || pc == 0x94F2) { rr_dump_shadow(); fprintf(stderr, "  sr %04X\n", rr_get_sr()); } } }
     {   /* RR_WATCHPC=a,b,...: at each listed PC print D0/D1 and the flags (state BEFORE it runs) */
         static uint32_t wp[16]; static int nwp = -1;
         if (nwp < 0) { nwp = 0; const char *e = getenv("RR_WATCHPC");
@@ -81,6 +107,22 @@ void rr_trace_ins(uint32_t pc)
 #define SH_IRQ 0xFFFFFFFFu
 static uint32_t sh_ret[SHADOW_MAX], sh_sp[SHADOW_MAX];
 static int sh_n, sh_target = -1;          /* sh_target: frame index the unwind stops at */
+#ifdef RR_TRACE
+void rr_dump_shadow(void) { fprintf(stderr, "  shadow stack:"); for (int k = sh_n - 1; k >= 0 && k >= sh_n - 12; k--) fprintf(stderr, " %08X", sh_ret[k]); fprintf(stderr, "\n"); }
+#endif
+/* A program that restarts itself from inside an interrupt handler (`jmp <entry>`) re-initialises the stack pointer and never returns through the frames it
+ * abandoned: their shadow entries (and IRQ markers) are dead. A frame whose recorded SP is BELOW the current SP has been popped past -- drop it, and recount
+ * the interrupts still open. Opt-in (ss22_game.prune_shadow): a program that pops return addresses by hand would lose frames it still needs. */
+void rr_shadow_prune(void)
+{
+    const uint32_t sp = (uint32_t)RG4(RR_REG_SP);
+    int n = sh_n;
+    while (n > 0 && sh_sp[n - 1] < sp) n--;
+    if (n == sh_n) return;
+    sh_n = n;
+    int irq = 0; for (int k = 0; k < n; k++) if (sh_ret[k] == SH_IRQ) irq++;
+    rr_in_irq = irq;
+}
 uint32_t rr_ret_to;
 long rr_ncalls;             /* calls made (bsr/jsr/IRQ): the checker's fuzz skips callers */
 
@@ -141,6 +183,10 @@ void rr_irq_enter(int lvl)
     { void rr_trace_mark(const char *); char b[32]; snprintf(b, sizeof b, "IRQ %d %08X", lvl, handler); rr_trace_mark(b); }
 #endif
     rr_n_irq[lvl]++;
+#ifdef RR_TRACE
+    if (getenv("RR_IRQLOG") && rr_frame >= (unsigned)atoi(getenv("RR_IRQLOG"))) fprintf(stderr, "[IRQ] enter level %d handler %08X frame %u from pc %06X sp %08X\n", lvl, handler, rr_frame, rr_trace_pc, (uint32_t)RG4(RR_REG_SP));
+    if (getenv("RR_PCSAMPLE") && rr_n_irq[lvl] < 3) fprintf(stderr, "[IRQ] level %d handler %08X (frame %u, from pc %06X)\n", lvl, handler, rr_frame, rr_trace_pc);
+#endif
     int j = rr_irq_push();
     rr_jump(handler, 0xFFFFFFFFu);
     if (sh_target != j) { fprintf(stderr, "[RR] irq handler %08X ended without rte\n", handler); exit(6); }
@@ -149,6 +195,9 @@ void rr_irq_enter(int lvl)
     { void rr_trace_mark(const char *); rr_trace_mark("RTE"); }
 #endif
     rr_in_irq--;
+#ifdef RR_TRACE
+    if (getenv("RR_IRQLOG") && rr_frame >= (unsigned)atoi(getenv("RR_IRQLOG"))) fprintf(stderr, "[IRQ] exit level %d frame %u\n", lvl, rr_frame);
+#endif
     set_sr(sr);
 }
 

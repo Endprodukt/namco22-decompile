@@ -62,6 +62,7 @@ bool ss22_host_open(const ss22_host_game *g, int scale, bool fs)      /* scale <
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_EVENTS | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "[HOST] SDL: %s\n", SDL_GetError()); return false; }
     eng_gl_context_attributes();
     eng_disp_load(game->cfg_file, scale, fs);                /* the saved display choices; --window N / --fullscreen override */
+    if (game->aim) SDL_SetHint(SDL_HINT_MOUSE_FOCUS_CLICKTHROUGH, "1");      /* a light gun: the click that focuses the window is still a shot */
     win = SDL_CreateWindow(game->title, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                            eng_disp_win_w(g_eng_disp.scale), eng_disp_win_h(g_eng_disp.scale),
                            SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI |
@@ -125,6 +126,7 @@ void ss22_host_shot(const char *path)
 
 /* The prepared frame into the window: the engine draws it at the render size into the shared render target, which is scaled
  * into the picture rectangle; the menu, when open, goes over it. */
+static SDL_Rect pic_r, gun_r;                        /* the last picture rectangle (drawable pixels) and the 4:3 part of it the light gun aims over */
 static eng_pace *pace_log;                           /* set by present_with(): present() times the frame's work into it */
 static void present(void)
 {
@@ -146,7 +148,44 @@ static void present(void)
         if (eng_gl_write_ppm(p, vw, vh)) fprintf(stderr, "[HOST] saved %s\n", p);
     }
     const SDL_Rect r = eng_disp_picture_rect(rw, rh);
-    rt_end_rect(win, r.x, r.y, r.w, r.h, eng_disp_sharp());   /* clears the window round the picture itself; a no-op when rt_begin drew straight into it */
+    pic_r = r; gun_r = r;
+    if (g_eng_disp.wide) { const int w = (int)(r.h * 4.0 / 3.0 + 0.5); gun_r.x = r.x + (r.w - w) / 2; gun_r.w = w; }   /* the 2D layers and the gun stay 4:3 */
+    rt_end_rect(win, r.x, r.y, r.w, r.h, eng_disp_sharp());
+    if (game->aim && g_eng_disp.gun_border) {          /* the light gun's border (Sinden-style guns track it): white, all round the window */
+        int dw, dh; SDL_GL_GetDrawableSize(win, &dw, &dh);
+        const float b = (float)(g_eng_disp.gun_border * (dw < dh ? dw : dh) / 100);
+        glViewport(0, 0, dw, dh);
+        glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, dw, dh, 0, -1, 1);
+        glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+        glDisable(GL_TEXTURE_2D); glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND); glDisable(GL_SCISSOR_TEST);
+        glColor3f(1, 1, 1);
+        glBegin(GL_QUADS);
+        glVertex2f(0, 0); glVertex2f((float)dw, 0); glVertex2f((float)dw, b); glVertex2f(0, b);
+        glVertex2f(0, dh - b); glVertex2f((float)dw, dh - b); glVertex2f((float)dw, (float)dh); glVertex2f(0, (float)dh);
+        glVertex2f(0, 0); glVertex2f(b, 0); glVertex2f(b, (float)dh); glVertex2f(0, (float)dh);
+        glVertex2f(dw - b, 0); glVertex2f((float)dw, 0); glVertex2f((float)dw, (float)dh); glVertex2f(dw - b, (float)dh);
+        glEnd();
+        glPopMatrix(); glMatrixMode(GL_PROJECTION); glPopMatrix(); glMatrixMode(GL_MODELVIEW);
+    }
+    if (game->aim && !eng_ui_is_open()) {
+        float ax, ay;
+        if (game->aim(&ax, &ay)) {                   /* the crosshair, over the picture */
+            int dw, dh; SDL_GL_GetDrawableSize(win, &dw, &dh);
+            const float cx = gun_r.x + ax * gun_r.w, cy = gun_r.y + ay * gun_r.h, s = gun_r.h / 24.0f;
+            glViewport(0, 0, dw, dh);
+            glMatrixMode(GL_PROJECTION); glPushMatrix(); glLoadIdentity(); glOrtho(0, dw, dh, 0, -1, 1);
+            glMatrixMode(GL_MODELVIEW); glPushMatrix(); glLoadIdentity();
+            glDisable(GL_TEXTURE_2D); glDisable(GL_DEPTH_TEST); glDisable(GL_BLEND); glDisable(GL_SCISSOR_TEST);
+            for (int pass = 0; pass < 2; pass++) {   /* a dark outline under a red cross, readable on any picture */
+                if (pass == 0) { glLineWidth(4.0f); glColor3f(0, 0, 0); } else { glLineWidth(2.0f); glColor3f(1, 0.1f, 0.1f); }
+                glBegin(GL_LINES);
+                glVertex2f(cx - s, cy); glVertex2f(cx - s * 0.3f, cy); glVertex2f(cx + s * 0.3f, cy); glVertex2f(cx + s, cy);
+                glVertex2f(cx, cy - s); glVertex2f(cx, cy - s * 0.3f); glVertex2f(cx, cy + s * 0.3f); glVertex2f(cx, cy + s);
+                glEnd();
+            }
+            glPopMatrix(); glMatrixMode(GL_PROJECTION); glPopMatrix(); glMatrixMode(GL_MODELVIEW);
+        }
+    }   /* clears the window round the picture itself; a no-op when rt_begin drew straight into it */
     bool quit = false;
     eng_ui_draw(&quit);
     { static int dbg = -1, n, shot = -1;             /* <tag>_HOSTDBG=1: what is in the window's back buffer just before it is shown;
@@ -190,6 +229,7 @@ static bool pump(void)
             if (sc == SDL_SCANCODE_ESCAPE) { eng_ui_set_open(true); game->input_neutral(); }
             if (sc == SDL_SCANCODE_P) { paused = !paused; fprintf(stderr, "[HOST] %s\n", paused ? "paused" : "running"); }
             if (sc == SDL_SCANCODE_F12) shot_pending = true;
+            if (sc == SDL_SCANCODE_F8 && game->aim) { eng_disp_cycle_gun_border(); fprintf(stderr, "[HOST] light-gun border %d%%\n", g_eng_disp.gun_border); }
             if (sc == SDL_SCANCODE_F11 || (sc == SDL_SCANCODE_RETURN && (e.key.keysym.mod & KMOD_ALT))) eng_disp_toggle_fullscreen();
         }
         if (e.type == SDL_CONTROLLERBUTTONDOWN && e.cbutton.button == SDL_CONTROLLER_BUTTON_RIGHTSTICK) { eng_ui_set_open(true); game->input_neutral(); fprintf(stderr, "[HOST] menu open (R3)\n"); }
@@ -223,6 +263,20 @@ static void pace(void)
     }
 }
 
+bool ss22_host_pointer(float *nx, float *ny, bool *inside)
+{
+    if (!win || gun_r.w <= 0 || gun_r.h <= 0) return false;
+    int mx, my, ww, wh, dw, dh;
+    SDL_GetMouseState(&mx, &my); SDL_GetWindowSize(win, &ww, &wh); SDL_GL_GetDrawableSize(win, &dw, &dh);
+    const float px = (float)mx * dw / (ww ? ww : 1), py = (float)my * dh / (wh ? wh : 1);
+    *nx = (px - gun_r.x) / gun_r.w; *ny = (py - gun_r.y) / gun_r.h;
+    /* an absolute-mouse gun (Sinden, Gun4IR, OpenFIRE, Reaper, AimTrak) aimed OFF the screen reports the pointer clamped at the screen edge
+     * (or a corner): the window's outermost pixel row/column is "off-screen", which is how those guns reload */
+    const bool edge = mx <= 0 || my <= 0 || mx >= ww - 1 || my >= wh - 1;
+    *inside = !edge && *nx >= 0 && *nx <= 1 && *ny >= 0 && *ny <= 1 && (SDL_GetWindowFlags(win) & SDL_WINDOW_MOUSE_FOCUS);
+    return true;
+}
+
 bool ss22_host_frame(void)
 {
     if (!win) return true;
@@ -238,6 +292,7 @@ bool ss22_host_frame(void)
     static int ftm = -1; if (ftm < 0) ftm = getenv("ENG_FTIME") != NULL;
     struct timespec a0, a1, a2, a3; if (ftm) clock_gettime(CLOCK_MONOTONIC, &a0);
     if (!pump()) return false;
+    if (game->aim) SDL_ShowCursor(eng_ui_is_open() || paused ? SDL_ENABLE : SDL_DISABLE);   /* the crosshair is the pointer */
     if (!paused && !eng_ui_is_open()) game->input_update();
     if (ftm) clock_gettime(CLOCK_MONOTONIC, &a1);
     present_with(&pl);

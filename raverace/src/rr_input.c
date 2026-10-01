@@ -121,6 +121,7 @@ void rr_input_load(const char *path)
             else if (sscanf(v, "%dx%d", &w, &h) == 2 && w >= 320 && h >= 240) { g_cfg_res_w = w; g_cfg_res_h = h; }
             continue; }
         if (!strcmp(k, "widescreen")) { g_cfg_wide = atoi(v) ? 1 : 0; continue; }
+        if (!strcmp(k, "wide_hud")) { extern int g_eng_hud_edges_on; g_eng_hud_edges_on = atoi(v) ? 1 : 0; continue; }
         if (!strcmp(k, "draw_distance")) {
             g_cfg_draw = !strcmp(v, "far") ? 1 : !strcmp(v, "farther") ? 2 : !strcmp(v, "maximum") ? 3 : 0;
             continue; }

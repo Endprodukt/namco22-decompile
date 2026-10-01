@@ -322,7 +322,8 @@ static inline bool c25_exec(c71_t *d, int pc, int op, int it)
                            d->arp = (v >> 13) & 7; d->ovm = (v >> 11) & 1;
                            d->intm = (v >> 9) & 1; d->dp = v & 0x1FF; }
     else if (hi == 0x51) { v = c25_dr(d, dma(d, lo));                              /* LST1 */
-                           d->arb = (v >> 13) & 7; d->tc = (v >> 11) & 1;
+                           d->arb = (v >> 13) & 7; d->arp = d->arb;      /* LST #1 loads ARB and ARP with the same value: the BIOS interrupt stub saves the old ARP in ARB (LARP 7 copies it there) and the game's return restores it this way */
+                           d->tc = (v >> 11) & 1;
                            d->sxm = (v >> 10) & 1; d->c = (v >> 9) & 1; d->pm = v & 3; }
     else if (hi == 0x78)   c25_dw(d, dma(d, lo), ((d->arp & 7) << 13) | (d->ovm << 11) | (1 << 10)
                                               | (d->intm << 9) | (d->dp & 0x1FF));   /* SST */

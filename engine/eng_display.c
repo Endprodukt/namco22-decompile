@@ -79,9 +79,12 @@ SDL_Rect eng_disp_picture_rect(int bw, int bh)
 {
     int ow, oh;
     out_size(&ow, &oh);
+    const int fw = ow, fh = oh;
+    const int bd = g_eng_disp.gun_border ? g_eng_disp.gun_border * (ow < oh ? ow : oh) / 100 : 0;   /* the light gun's border: the picture sits inside it */
+    ow -= 2 * bd; oh -= 2 * bd; (void)fw; (void)fh;
     double ar = (double)bw / bh;
     if (!g_eng_disp.wide) {
-        if (g_eng_disp.aspect == 0) { SDL_Rect r = { 0, 0, ow, oh }; return r; }
+        if (g_eng_disp.aspect == 0) { SDL_Rect r = { bd, bd, ow, oh }; return r; }
         ar = g_eng_disp.aspect == 2 ? 8.0 / 7.0 : g_eng_disp.aspect == 3 ? 16.0 / 9.0 : 4.0 / 3.0;
     }
     int w, h;
@@ -91,7 +94,7 @@ SDL_Rect eng_disp_picture_rect(int bw, int bh)
         w = bw * k; h = bh * k;
     } else if (ow <= oh * ar) { w = ow; h = (int)(ow / ar + 0.5); }
     else { h = oh; w = (int)(oh * ar + 0.5); }
-    SDL_Rect r = { (ow - w) / 2, (oh - h) / 2, w, h };
+    SDL_Rect r = { bd + (ow - w) / 2, bd + (oh - h) / 2, w, h };
     return r;
 }
 
@@ -145,6 +148,10 @@ void eng_disp_load(const char *cfg_path, int scale, bool fullscreen)
     d->scaling = 0;
     const char *s = eng_cfg_get("scaling");
     for (int i = 0; s && i < 3; i++) if (!strcmp(s, scaling_cfg[i])) d->scaling = i;
+    d->hud_edges = eng_cfg_int("wide_hud", 1) != 0;
+    { extern int g_eng_hud_edges_on; g_eng_hud_edges_on = d->hud_edges; }
+    d->gun_border = eng_cfg_int("gun_border", 0);
+    if (d->gun_border < 0 || d->gun_border > 6) d->gun_border = 0;
     d->volume = eng_cfg_int("volume", 100);
     if (d->volume < 0) d->volume = 0;
     if (d->volume > 100) d->volume = 100;
@@ -187,6 +194,20 @@ void eng_disp_set_res(int w, int h)
     eng_cfg_set("resolution", v);
     if (g_eng_disp.winmode == 2) apply_window();          /* exclusive: it is the display mode too */
 }
+void eng_disp_set_hud_edges(int on)
+{
+    g_eng_disp.hud_edges = on != 0;
+    { extern int g_eng_hud_edges_on; g_eng_hud_edges_on = g_eng_disp.hud_edges; }
+    eng_cfg_set("wide_hud", g_eng_disp.hud_edges ? "1" : "0");
+}
+
+void eng_disp_cycle_gun_border(void)
+{
+    g_eng_disp.gun_border = (g_eng_disp.gun_border + 1) % 7;
+    char b[8]; snprintf(b, sizeof b, "%d", g_eng_disp.gun_border);
+    eng_cfg_set("gun_border", b);
+}
+
 void eng_disp_set_wide(int on)
 {
     g_eng_disp.wide = on != 0;

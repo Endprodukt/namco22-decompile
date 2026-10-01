@@ -91,6 +91,19 @@ The program chips are read as either `tw2ver-a.1`-`.4` (older MAME sets) or
 `tw2vera.1`-`.4` (MAME 0.271 and later, which dropped the hyphen) --
 whichever spelling your zip actually has, either is taken.
 
+## Time Crisis
+
+Time Crisis needs one MAME set: `timecris.zip` (World, TS2 Ver.B). Give it to the build script:
+
+```bash
+timecris/build.sh /path/to/timecris.zip
+```
+
+It checks all 31 chip files by name (or CRC) and size and copies them into `timecris/extracted/`; the 68020 program is the four chips
+`ts2verb.1` - `.4` (MAME's `timecris`), interleaved into `timecris_main.bin`. The Ver.A program that the same zip carries under `timecrisa/` is a
+different version and is not used. The installed packages and the Windows version do all this themselves the first time the game starts, from
+`timecris.zip` in the game's `roms` folder. Compare your files with [ROM_CHECKSUMS.md](ROM_CHECKSUMS.md).
+
 ## Dirt Dash
 
 Dirt Dash needs one MAME set: `dirtdash.zip` (World, DT2 Ver.A). Give it

@@ -36,6 +36,7 @@ typedef struct {
                                               * needle: band 7, depth 0; every world polygon has a depth) */
 } eng_hud_cfg;
 
+extern int g_eng_hud_edges_on;           /* 0 = keep the HUD in the 4:3 centre in widescreen (default 1) */
 extern int g_eng_hud_e;                  /* this frame's shift in scene units (0 = the HUD stays in the 4:3 centre) */
 
 /* Per shown frame, once g_scene_x0 is set. hud_on: the game is showing its HUD. E = the extra width at each side (whole units, so a

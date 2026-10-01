@@ -20,6 +20,7 @@ typedef struct {
     uint16_t     bit;                        /* the INPUTS bit it presses (0 for an axis key) */
     int          axis;                       /* SS22_AX_*: a key that drives the wheel or a pedal */
     uint32_t     pad;                        /* SS22_PAD(...) buttons that press it */
+    uint8_t      mouse;                      /* SDL_BUTTON_LMASK/RMASK/MMASK... that press it (light-gun games; 0 = none) */
 } ss22_action;
 
 typedef struct {
@@ -35,6 +36,7 @@ typedef struct {
                                               * THE TEST SWITCH IS A TOGGLE like MAME's (press once = on, again = off): the action whose bit
                                               * is test_bit latches. The Controls page has both as rows, so a pad (the Steam Deck) reaches them */
     bool wheel_motor;                        /* the cabinet's steering motor (Dirt Dash): the MCU's UART0 bytes drive a force-feedback wheel */
+    bool light_gun;                          /* a LIGHT GUN cabinet: the mouse pointer (or the right stick, or the arrow keys) aims -> g_ss22_gun_x/_y (engine/ss22_board.h) */
 } ss22_input_game;
 
 void ss22_input_init(const ss22_input_game *g);         /* after the settings file is loaded: the key bindings, the pads */
@@ -46,5 +48,7 @@ void ss22_input_neutral(void);                          /* release everything (t
  * higher A-D side), bits 2-7 = 63 - the strength with the bit order reversed; 0xFF = no force. The 68K sends one a frame, its
  * steering torque (work RAM 0xE00148) / 8, clamped to 62 -- what the FFB plugin reads out of MAME, here from the real link. */
 void ss22_input_motor(uint8_t b);
+/* the crosshair: where the gun is aimed in the 4:3 game picture, 0..1 each way; false = off-screen (nothing to draw) */
+bool ss22_input_aim(float *nx, float *ny);
 void ss22_input_close(void);                            /* stop the wheel's force and let go of it (also run at exit) */
 #endif

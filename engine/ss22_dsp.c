@@ -144,8 +144,10 @@ static void start(void)
     faulted = false;
 }
 
+extern unsigned rr_frame;
 void ss22_dsp_control(uint8_t v)
 {
+    { static int lg = -1; if (lg < 0) lg = getenv("SS22_DSPLOG") != NULL; if (lg) fprintf(stderr, "[DSP] control write %02X (was %02X, running %d) frame %u\n", v, ctrl, running, rr_frame); }
     if (!m[0] || v == ctrl) return;        /* MAME: no-op when unchanged */
     ctrl = v;
     if (v == 0) { running = false; irq_on = false; slave_on = false; }
@@ -171,6 +173,17 @@ static const char *compare(const c71_t *a, const c71_t *b)
 }
 #endif
 
+#ifdef SS22_ORACLE
+static unsigned last_pc;
+#endif
+static const char *compare_regs(const c71_t *a, const c71_t *b)
+{
+#define F(x) if (a->x != b->x) return #x
+    F(pc); F(t); F(acc); F(p); F(arp); F(arb); F(dp); F(c); F(tc); F(ovm); F(intm); F(tim); F(sp); F(rpt); F(idle); F(ifr);
+#undef F
+    if (memcmp(a->ar, b->ar, sizeof a->ar)) return "ar";
+    return NULL;
+}
 void ss22_dsp_run(long steps)
 {
     if (!m[0] || !running || faulted) return;
@@ -184,13 +197,25 @@ void ss22_dsp_run(long steps)
         }
         return;
     }
-    for (long s = 0; s < steps; s++)
+    for (long s = 0; s < steps; s++) {
+#ifdef SS22_ORACLE
+        static int fine = -1; if (fine < 0) fine = getenv("C25_LS_FINE") != NULL;
+        if (lockstep && fine && s > 0) {          /* C25_LS_FINE=1: compare the registers after EVERY step and name the first instruction that differs (RAM is compared per slice) */
+            const char *d = compare_regs(m[0], m[1]);
+            if (d) { static int n; if (++n <= 5) fprintf(stderr, "[C25-LOCKSTEP] step %ld of slice %ld: %s differs after the instruction at %04X (translation pc %04X, oracle pc %04X)\n   cur_pc T %04X O %04X  prog[last] T %04X O %04X [last+1] T %04X O %04X ar0 %04X/%04X\n   T: sp %d intm %d ifr %X imr %X tim %04X rpt %d idle %d acc %08X | O: sp %d intm %d ifr %X imr %X tim %04X rpt %d idle %d acc %08X\n", s, slices + 1, d, last_pc, m[0]->pc, m[1]->pc,
+                        m[0]->cur_pc, m[1]->cur_pc, m[0]->prog[last_pc], m[1]->prog[last_pc], m[0]->prog[0x19], m[1]->prog[0x19], m[0]->ar[0], m[1]->ar[0],
+                        m[0]->sp, m[0]->intm, m[0]->ifr, m[0]->imr, m[0]->tim, m[0]->rpt, m[0]->idle, (unsigned)m[0]->acc, m[1]->sp, m[1]->intm, m[1]->ifr, m[1]->imr, m[1]->tim, m[1]->rpt, m[1]->idle, (unsigned)m[1]->acc);
+                     uint32_t *keep = m[1]->poly; bool (*x)(c71_t *, int) = m[1]->xlat; *m[1] = *m[0]; m[1]->poly = keep; m[1]->xlat = x; }
+        }
+        last_pc = m[0]->pc;
+#endif
         for (int i = 0; i < nm; i++)
             if (!c71_step(m[i])) {
                 fprintf(stderr, "[DSP] master%s stopped at %04X: %s\n", i ? " (oracle shadow)" : "", m[i]->cur_pc, m[i]->error);
                 if (i == 0) { fprintf(stderr, "[DSP] stack (sp %d, top first):", m[i]->sp); for (int k = m[i]->sp - 1; k >= 0 && k >= m[i]->sp - 24; k--) fprintf(stderr, " %04X", m[i]->stack[k]); fprintf(stderr, "\n"); }
                 faulted = true; return;
             }
+    }
 #ifdef SS22_ORACLE
     if (lockstep) {
         slices++;

@@ -44,6 +44,7 @@ static bool menu_open;
 static SDL_Window *g_win;
 /* display settings (defined in the display section below; saved in the cfg) */
 static nk_bool widescreen;
+static nk_bool wide_hud_edges = 1;                 /* widescreen: the HUD slides to the corners (default) or stays as the game drew it */
 static int cur_aspect, win_mode, want_w, want_h;
 static int display_cfg;          /* the cfg carried display settings: apply them at startup */
 static int naspect(void);
@@ -84,6 +85,7 @@ int ui_controls_save(void) {
     fprintf(f, "volume=%d\n", (int)(audio_hle_volume() * 100.0f + 0.5f));
     fprintf(f, "freeplay=%d\n", W16(0x3FF4) ? 1 : 0);
     fprintf(f, "widescreen=%d\n", widescreen ? 1 : 0);
+    fprintf(f, "wide_hud=%d\n", wide_hud_edges ? 1 : 0);
     fprintf(f, "aspect=%d\n", cur_aspect);
     fprintf(f, "window_mode=%d\n", win_mode);
     fprintf(f, "resolution=%dx%d\n", want_w, want_h);
@@ -104,6 +106,7 @@ int ui_controls_load(void) {
         if (!strcmp(line, "volume")) { audio_hle_set_volume(atoi(eq + 1) / 100.0f); continue; }
         if (!strcmp(line, "freeplay")) { g_freeplay_cfg = atoi(eq + 1) ? 1 : 0; continue; }
         if (!strcmp(line, "widescreen")) { widescreen = atoi(eq + 1) ? 1 : 0; display_cfg = 1; continue; }
+        if (!strcmp(line, "wide_hud")) { extern int g_wide_hud_center; wide_hud_edges = atoi(eq + 1) ? 1 : 0; g_wide_hud_center = !wide_hud_edges; display_cfg = 1; continue; }
         if (!strcmp(line, "aspect")) { int a = atoi(eq + 1); if (a >= 0 && a < naspect()) cur_aspect = a;
                                        else if (a == naspect()) widescreen = 1;   /* the old list's last entry */
                                        display_cfg = 1; continue; }
@@ -479,6 +482,14 @@ void ui_draw(SDL_Window *win, bool *quit) {
               if (w != widescreen) changed = true; }
             nk_layout_row_dynamic(ctx, 18, 1);
             nk_label(ctx, "  more world at the sides, HUD in the corners", NK_TEXT_LEFT);
+            if (widescreen) {                         /* keep the original HUD in the 4:3 centre instead */
+                extern int g_wide_hud_center;
+                nk_layout_row_dynamic(ctx, 24, 1);
+                nk_bool h = wide_hud_edges;
+                nk_checkbox_label(ctx, wide_hud_edges ? "Widescreen HUD: at the corners" : "Widescreen HUD: original (centre)", &wide_hud_edges);
+                if (h != wide_hud_edges) changed = true;
+                g_wide_hud_center = !wide_hud_edges;
+            }
 
             nk_layout_row_dynamic(ctx, 20, 1);
             nk_label(ctx, "Window mode", NK_TEXT_LEFT);

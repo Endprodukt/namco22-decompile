@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Time Crisis
+Comment=Namco's 1995 arcade light-gun shooter (decompiled engine) -- aim with the mouse or a light gun
+Exec=timecrisis
+Icon=timecrisis
+Terminal=false
+Categories=Game;ArcadeGame;

@@ -4,17 +4,19 @@
 #   namco22-launch rave [1-9] [args]     Rave Racer (a number = window scale)
 #   namco22-launch tokyo [1-9] [args]    Tokyo Wars (a number = window scale)
 #   namco22-launch dirt [1-9] [args]     Dirt Dash (a number = window scale)
+#   namco22-launch tc [1-9] [args]       Time Crisis (a number = window scale; the mouse is the gun)
 # Each game plays from its own folder under ~/.local/share/namco22/, which holds
 # its roms/, the unpacked chips, the settings, scores and recordings. The ROM zips
 # (MAME sets) go in that roms/ folder; ~/Downloads is checked on first start.
-LIB=/usr/lib/namco22
+LIB=${NAMCO22_LIB:-/usr/lib/namco22}      # an AppImage points this at its own copy
 game="$1"; [ $# -gt 0 ] && shift
 case "$game" in
     prop|propcycle) title="Prop Cycle"; dir=propcycle; zips="propcycl.zip" ;;
     rave|raverace)  title="Rave Racer"; dir=raverace;  zips="raverace.zip namcoc74.zip" ;;
     tokyo|tokyowar|tokyowars|tw) title="Tokyo Wars"; dir=tokyowar; zips="tokyowar.zip" ;;
     dirt|dirtdash|dd) title="Dirt Dash"; dir=dirtdash; zips="dirtdash.zip" ;;
-    *) sed -n '2,10p' "$0" | sed 's/^# \?//'; exit 1 ;;
+    tc|timecris|timecrisis|crisis) title="Time Crisis"; dir=timecris; zips="timecris.zip" ;;
+    *) sed -n '2,11p' "$0" | sed 's/^# \?//'; exit 1 ;;
 esac
 data="${XDG_DATA_HOME:-$HOME/.local/share}/namco22/$dir"
 mkdir -p "$data/roms" || exit 1
@@ -69,4 +71,9 @@ case "$dir" in
             exec "$LIB/dd" extracted --window ${1:+"$1"}
         fi
         exec "$LIB/dd" extracted "$@" ;;
+    timecris)
+        if [ $# -eq 0 ] || expr "$1" : '[1-9]$' >/dev/null; then
+            exec "$LIB/tc" extracted --window ${1:+"$1"}
+        fi
+        exec "$LIB/tc" extracted "$@" ;;
 esac

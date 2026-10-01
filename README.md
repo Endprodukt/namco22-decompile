@@ -12,6 +12,7 @@ where a MAME set has since renamed one (see [docs/ROM_CHECKSUMS.md](docs/ROM_CHE
 | **Rave Racer** | 1995 | Playable: races, with sound, online play (LAN and internet) | `raverace.zip` + `namcoc74.zip` | yes | yes |
 | **Tokyo Wars** | 1996 | Playable: attract, play, sound, widescreen | `tokyowar.zip` | yes | yes |
 | **Dirt Dash** | 1995 | Playable: five stages, sound, widescreen | `dirtdash.zip` | yes | yes |
+| **Time Crisis** | 1995 | Playable: attract, three-coin play through the stages, the operator's test mode, sound, widescreen; **the mouse is the gun**, and light guns work (see below) | `timecris.zip` | yes | yes |
 
 **Are you running the same ROMs as the authors?** The checksums of every ROM file the games use are in
 [docs/ROM_CHECKSUMS.md](docs/ROM_CHECKSUMS.md), with a list in `md5sum` format for each game.
@@ -28,6 +29,10 @@ Rave Racer:
 
 ![Rave Racer: a race in widescreen](docs/images/raverace-widescreen.png)
 
+Time Crisis:
+
+![Time Crisis: the submarine hangar, with the gun crosshair](docs/images/timecrisis-gameplay.png)
+
 Dirt Dash:
 
 ![Dirt Dash: a race in widescreen](docs/images/dirtdash-gameplay.png)
@@ -43,18 +48,25 @@ Tokyo Wars, the title screen:
 
 ## Download (nothing to build)
 
-Each release on the [Releases page](https://github.com/spacestate1/namco22-decompile/releases) has three ready-made packages.
+Each release on the [Releases page](https://github.com/spacestate1/namco22-decompile/releases) has ready-made packages.
 **None of them contains game files**: after installing, you put your own zips in a folder (the `INSTALL.txt` next to the packages says where).
 
 | Package | For | How to install |
 |---|---|---|
 | `namco22_VERSION_amd64.deb` | Ubuntu 22.04 or newer, Linux Mint 21 or newer, LMDE 6, Debian 12 or newer | `sudo apt install ./namco22_*_amd64.deb` |
 | `namco22-VERSION-1.fc40.x86_64.rpm` | Fedora 40 or newer | `sudo dnf install ./namco22-*.x86_64.rpm` |
+| `PropCycle-VERSION-x86_64.AppImage`, `RaveRacer-...`, `TokyoWars-...`, `DirtDash-...` | **The Steam Deck**, and any 64-bit Linux without installing anything | `chmod +x` the file and run it (on a Deck: Desktop Mode, right-click it > Add to Steam) |
 | `windows-release-VERSION.zip` | Windows 10 or 11, 64-bit | Unzip it anywhere, put the game zips in its `roms` folder, double-click the game's `.exe` |
 
-On Linux, start a game from the applications menu (or type `propcycle`, `raveracer`, `tokyowars` or `dirtdash`). The first time, it makes the folder
+On Linux, start a game from the applications menu (or type `propcycle`, `raveracer`, `tokyowars`, `dirtdash` or `timecrisis`). The first time, it makes the folder
 `~/.local/share/namco22/<game>/roms`, tells you which zip is missing and copies any it finds in `~/Downloads`. To uninstall: `sudo apt remove namco22`
 (or `sudo dnf remove namco22`); your game files, settings and scores stay in `~/.local/share/namco22/`.
+
+**Steam Deck:** download the AppImage of each game you want, put your ROM zips in `~/.local/share/namco22/<game>/roms/` (Desktop Mode: Dolphin > Ctrl+H shows the
+hidden `.local` folder; zips in `~/Downloads` are found automatically), then in Desktop Mode right-click the AppImage > *Add to Steam* (or Steam >
+*Add a Non-Steam Game*) and start it from Game Mode. The AppImages use the Deck's own SDL2, so Steam Input works: the menu opens with **R3** or by holding
+**Start** for a second. Each AppImage uses the same folders as the `.deb`, so the ROMs and settings are shared. If an AppImage will not start, run it from a
+terminal (`./DirtDash-*.AppImage`) and read the message; on a system without FUSE, `--appimage-extract-and-run` works.
 
 ## How it was made
 
@@ -73,7 +85,14 @@ and checked, piece by piece, against the arcade machine running in
 - **Dirt Dash**: the program is translated to C by the same tool
   (`dirtdash/gen/dd_lifted.c`); its master DSP and sound programs are
   turned into C when you build, from your own copy of the game files.
-- The sound programs of all four games are turned into C when you build,
+- **Time Crisis**: the program is translated to C by the same tool
+  (`timecris/gen/tc_lifted_NN.c`, 16 parts); its master DSP and sound programs are
+  turned into C when you build, from your own copy of the game files.
+  It is the newest game here: the program's code was checked against MAME's
+  own coverage of the real game, and the DSP and sound translations against
+  the interpreters they were made from; it has **not yet been compared with MAME
+  frame by frame or note by note**, so expect small differences.
+- The sound programs of all five games are turned into C when you build,
   from your own copy of the game files.
 
 This repository has **only the code**. It has no game files and no Ghidra
@@ -109,9 +128,10 @@ somewhere else:
 raverace/build.sh ~/Downloads/raverace.zip ~/Downloads/namcoc74.zip        # Rave Racer
 tokyowar/build.sh ~/Downloads/tokyowar.zip                                 # Tokyo Wars
 dirtdash/build.sh ~/Downloads/dirtdash.zip                                 # Dirt Dash
+timecris/build.sh ~/Downloads/timecris.zip                                 # Time Crisis
 ```
 
-Rave Racer's, Tokyo Wars' and Dirt Dash's first builds take a few minutes.
+Rave Racer's, Tokyo Wars', Dirt Dash's and Time Crisis' first builds take a few minutes.
 
 Then play:
 
@@ -120,6 +140,7 @@ Then play:
 ./launch.sh rave      # Rave Racer
 ./launch.sh tokyo     # Tokyo Wars
 ./launch.sh dirt      # Dirt Dash (`./launch.sh dirt jungle` starts in a stage: city, jungle, hill, mountain, snow)
+./launch.sh tc        # Time Crisis (the mouse is the gun)
 ./launch.sh           # the list of games and options
 ```
 
@@ -134,8 +155,8 @@ All four games run on Windows. The Windows version is built from Linux. Type:
 This makes a `windows-release` folder. Copy it to the Windows computer.
 Put the game files in its `roms` folder: `propcycl.zip` for Prop Cycle,
 `raverace.zip` and `namcoc74.zip` for Rave Racer, `tokyowar.zip` for Tokyo
-Wars, `dirtdash.zip` for Dirt Dash. Then double-click **PropCycle.exe**,
-**RaveRacer.exe**, **TokyoWars.exe** or **DirtDash.exe**.
+Wars, `dirtdash.zip` for Dirt Dash, `timecris.zip` for Time Crisis. Then double-click **PropCycle.exe**,
+**RaveRacer.exe**, **TokyoWars.exe**, **DirtDash.exe** or **TimeCrisis.exe**.
 
 Building on Windows itself, and what in the code is there for Windows only:
 [docs/WINDOWS.md](docs/WINDOWS.md).
@@ -224,6 +245,25 @@ A game controller works in all the games. In Rave Racer the keys can be
 changed in `raverace/rr_controls.cfg`; in Tokyo Wars and Dirt Dash, in the menu
 (**Controls**) or in `tokyowar/tw_controls.cfg` / `dirtdash/dd_controls.cfg`.
 
+**Time Crisis.** A light-gun shooter. **The mouse is the gun.**
+
+| Key | What it does |
+|---|---|
+| Mouse | Aim |
+| Left button (or `Space`) | Shoot (also starts the game and picks menu items) |
+| Right button (or `Z`) | The foot pedal: step out of cover to attack, step back, reload |
+| `5` | Put in a coin (a game costs three) |
+| `9` | Service |
+| `F2` | Test mode on / off (the operator's menu: shoot inside the screen = up, outside = down, pedal = enter) |
+| `F8` | A white border round the picture (cycles its width; some light guns need it) |
+| Arrow keys / a pad's right stick | Aim without a mouse; `A` / right shoulder shoots, `B` / left shoulder is the pedal |
+| `Esc` | Menu (screen, sound, keys) |
+| `F11` / `F12` | Full screen / picture |
+
+**Light guns.** A gun that acts as an absolute mouse (Sinden, Gun4IR, OpenFIRE, Reaper, AimTrak) works as it is: aim at the screen and shoot.
+To **reload**, aim a little OFF the screen and shoot (the pointer sits on the window's edge, which the game reads as "off screen"), or hold `R` or the
+gun's side button. The widescreen picture keeps the game's 4:3 aiming area in the middle. Guns with their own calibration need it done once in their own software. Not tested here: any real light gun hardware.
+
 **Steering with the stick** (Tokyo Wars and Dirt Dash): *Esc > Controls > Stick steering* sets how the stick turns
 the wheel. **Medium** (the default) is gentle near the centre and still reaches full lock at the edge; **Smooth** and
 **Very smooth** are gentler still; **Linear** turns the wheel in step with the stick.
@@ -238,7 +278,7 @@ screen says which controls choose, enter and change a value), turn it off from
 the menu to leave. A hint on the screen says how to open the menu for the first
 few seconds after the game starts, when a pad is connected.
 
-## Screen settings (Prop Cycle, Tokyo Wars and Dirt Dash)
+## Screen settings (Prop Cycle, Tokyo Wars, Dirt Dash and Time Crisis)
 
 Press `Esc` and open **Display**. Your choices are saved by themselves.
 
@@ -257,7 +297,7 @@ Press `Esc` and open **Display**. Your choices are saved by themselves.
 - **"can't be used"**: the zip is the wrong game or version (compare your files with
   [docs/ROM_CHECKSUMS.md](docs/ROM_CHECKSUMS.md)). Prop Cycle
   needs the one called `propcycl`; Rave Racer needs `raverace` and
-  `namcoc74`; Tokyo Wars needs `tokyowar`; Dirt Dash needs `dirtdash`.
+  `namcoc74`; Tokyo Wars needs `tokyowar`; Dirt Dash needs `dirtdash`; Time Crisis needs `timecris` (World, TS2 Ver.B).
 - **"still missing dt2vera.1"** (Dirt Dash): the program chips `dt2vera.1` and `dt2vera.2` were not found
   in `dirtdash.zip`. They can be at the top of the zip, in a `dirtdasha/` folder or in any other folder, or
   in a separate `dirtdasha.zip` beside it. If the message says the chip "cannot be used", it says why (wrong
@@ -265,7 +305,7 @@ Press `Esc` and open **Display**. Your choices are saved by themselves.
 - **"c71.bin is missing"**: that message is from an older version. The DSP's BIOS is built in now, so
   `c71.bin` and `namcoc71.zip` are not needed; update to a current build.
 - **Black or white screen**: update your graphics driver.
-- **Slow, or the picture stutters.** Open the game's log (`raveracer.log`, `tokyowar.log`, `dirtdash.log`,
+- **Slow, or the picture stutters.** Open the game's log (`raveracer.log`, `tokyowar.log`, `dirtdash.log`, `timecris.log`,
   `propcycl.log` beside the `.exe` on Windows; the terminal window on Linux) and look at these lines:
   - `[HOST] OpenGL: ...` (Prop Cycle: `OpenGL: ...`) names the graphics chip the game is using. It should be
     your graphics card, for example *NVIDIA GeForce RTX 3050 Ti*. If a laptop with **two** graphics chips shows the

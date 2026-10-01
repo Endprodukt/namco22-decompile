@@ -24,6 +24,7 @@ void rr_host_set_winmode(int m);         /* 0 windowed, 1 desktop fullscreen, 2 
 void rr_host_set_scale(int k);           /* windowed size, 1..4 x 640x480 */
 void rr_host_set_res(int w, int h);      /* render size; 0x0 = native */
 void rr_host_set_wide(int on);
+void rr_host_set_hud_edges(int on);                /* widescreen: the HUD at the edges (default) or the original, in the 4:3 centre */
 void rr_host_set_draw(int level);           /* draw distance 0 original .. 3 maximum */
 const char *rr_host_draw_name(int level);
 void rr_host_set_aspect(int a);          /* 0 stretch, 1 4:3, 2 8:7, 3 16:9 */

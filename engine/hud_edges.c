@@ -9,12 +9,13 @@
 #include "hud_edges.h"
 
 int g_eng_hud_e;
+int g_eng_hud_edges_on = 1;              /* the Display menu's "Widescreen HUD" (eng_display.c / a game's own menu): 0 keeps the original HUD in the 4:3 centre */
 
 void eng_hud_begin(bool hud_on)
 {
     static int centre = -1;
     if (centre < 0) { const char *e = getenv("ENG_HUD_CENTER"); centre = e && *e != '0'; }
-    g_eng_hud_e = (hud_on && !centre && g_scene_x0 < 0.0f) ? (int)(-g_scene_x0) : 0;
+    g_eng_hud_e = (hud_on && !centre && g_eng_hud_edges_on && g_scene_x0 < 0.0f) ? (int)(-g_scene_x0) : 0;
 }
 
 bool eng_hud_marks_up(const uint8_t *text, const eng_hud_mark *marks, int n, int *hold)
