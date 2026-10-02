@@ -421,7 +421,7 @@ static void ramp(uint16_t *v, int toward, int lo, int hi, int step)
 static bool held(int act)
 {
     const Uint8 *k = SDL_GetKeyboardState(NULL);
-    for (int i = 0; i < g_bind[act].nkeys; i++) if (k[g_bind[act].keys[i]]) return true;
+    if (!rr_ui_chat_typing()) for (int i = 0; i < g_bind[act].nkeys; i++) if (k[g_bind[act].keys[i]]) return true;
     for (int d = 0; d < MAX_DEV; d++) {
         if (dev[d].gc && g_bind[act].pad != SDL_CONTROLLER_BUTTON_INVALID && SDL_GameControllerGetButton(dev[d].gc, g_bind[act].pad)) return true;
         SDL_Joystick *js = dev[d].gc ? SDL_GameControllerGetJoystick(dev[d].gc) : dev[d].js;
@@ -636,6 +636,7 @@ bool rr_host_frame(void)
             save_opt("fullscreen", g_cfg_fullscreen ? "1" : "0"); save_opt("window_mode", g_cfg_winmode ? "1" : "0");
             continue;
         }
+        if (rr_ui_chat_event(&e)) continue;
         if (rr_ui_is_open()) { rr_ui_event(&e); if (!rr_ui_is_open()) fprintf(stderr, "[HOST] menu closed\n"); continue; }
         if (pressed(&e, RR_QUIT) ||
             (e.type == SDL_CONTROLLERBUTTONDOWN && (e.cbutton.button == SDL_CONTROLLER_BUTTON_START ||
@@ -670,6 +671,8 @@ bool rr_host_frame(void)
           }
       } }
     if (rr_ui_quit_requested()) return false;
+    { const int want = (!g_cfg_fullscreen || rr_ui_is_open()) ? SDL_ENABLE : SDL_DISABLE;   /* fullscreen hides the pointer for the game, but the menu needs it */
+      if (SDL_ShowCursor(SDL_QUERY) != want) SDL_ShowCursor(want); }
     if (!paused && !rr_ui_is_open() && !rr_input_replaying()) {
         set_bit(0x1000, held(RR_COIN1));
         set_bit(0x0200, held(RR_COIN2));
@@ -696,17 +699,14 @@ bool rr_host_frame(void)
      * native or widescreen size follows the window; it lands next frame) */
     apply_render_size();
     present_picture();
-    if (rr_ui_is_open() || rr_ui_hint_active()) {            /* the menu, over the dimmed game (or just the menu-button hint) */
+    if (rr_ui_is_open() || rr_ui_hint_active() || rr_ui_chat_active()) {            /* the menu over the game (or just the hint / chat) */
         int ow, oh; out_size(&ow, &oh);
         glViewport(0, 0, ow, oh);
         glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, 1, 0, 1, -1, 1);
         glMatrixMode(GL_MODELVIEW); glLoadIdentity();
         glDisable(GL_TEXTURE_2D); glDisable(GL_SCISSOR_TEST); glDisable(GL_ALPHA_TEST);
         glEnable(GL_BLEND); glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-        if (rr_ui_is_open()) {
-            glColor4f(0, 0, 0, 150 / 255.0f);
-            glBegin(GL_QUADS); glVertex2f(0, 0); glVertex2f(1, 0); glVertex2f(1, 1); glVertex2f(0, 1); glEnd();
-        }
+        /* the menu draws over the picture as it is: no dimming layer (it used to darken the whole game while Esc was open) */
         glDisable(GL_BLEND);
         bool q = false; rr_ui_draw(&q);
     }

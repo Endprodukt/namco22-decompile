@@ -293,6 +293,8 @@ bool ss22_host_frame(void)
     struct timespec a0, a1, a2, a3; if (ftm) clock_gettime(CLOCK_MONOTONIC, &a0);
     if (!pump()) return false;
     if (game->aim) SDL_ShowCursor(eng_ui_is_open() || paused ? SDL_ENABLE : SDL_DISABLE);   /* the crosshair is the pointer */
+    else { const int want = (!g_eng_disp.winmode || eng_ui_is_open()) ? SDL_ENABLE : SDL_DISABLE;   /* fullscreen hides the pointer for the game, the menu needs it */
+           if (SDL_ShowCursor(SDL_QUERY) != want) SDL_ShowCursor(want); }
     if (!paused && !eng_ui_is_open()) game->input_update();
     if (ftm) clock_gettime(CLOCK_MONOTONIC, &a1);
     present_with(&pl);

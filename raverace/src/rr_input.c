@@ -35,7 +35,7 @@ int g_cfg_fullscreen = 0, g_cfg_scale = 2, g_cfg_scaling = 0;
 int g_cfg_draw = 0;          /* draw distance level 0..3 (rr_host_set_draw) */
 int g_cfg_winmode = -1, g_cfg_res_w = 640, g_cfg_res_h = 480, g_cfg_wide = 0, g_cfg_aspect = 1;   /* scaling: 0 smooth, 1 sharp, 2 integer */            /* free_play = 0|1 in rr_controls.cfg; -1 = not set */
 int g_pad_deadzone = 8000;          /* of 32767; a real Xbox One pad here rests at 3019 */
-char g_cfg_net_server[128], g_cfg_net_name[24];   /* net_server / net_name in rr_controls.cfg (the Online page) */
+char g_cfg_net_server[128] = "zonesync.net", g_cfg_net_name[24];   /* net_server / net_name in rr_controls.cfg (the Online page) */
 
 /* Raw joysticks: devices SDL does not know as a gamepad (wheels, pedals,
  * arcade sticks). Axes and buttons are mapped by number -- find the numbers
@@ -132,7 +132,7 @@ void rr_input_load(const char *path)
         if (!strcmp(k, "scaling")) {
             g_cfg_scaling = !strcmp(v, "sharp") ? 1 : !strcmp(v, "integer") ? 2 : 0;
             continue; }
-        if (!strcmp(k, "net_server")) { snprintf(g_cfg_net_server, sizeof g_cfg_net_server, "%s", v); continue; }
+        if (!strcmp(k, "net_server")) { if (*v) snprintf(g_cfg_net_server, sizeof g_cfg_net_server, "%s", v); continue; }   /* an empty saved value keeps the default (zonesync.net) */
         if (!strcmp(k, "net_name")) { snprintf(g_cfg_net_name, sizeof g_cfg_net_name, "%s", v); continue; }
         if (!strcmp(k, "joy_steer_guid") || !strcmp(k, "joy_gas_guid") || !strcmp(k, "joy_brake_guid")) {
             rr_joyaxis_t *ax = k[4] == 's' ? &g_joy_steer : k[4] == 'g' ? &g_joy_gas : &g_joy_brake;

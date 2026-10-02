@@ -14,6 +14,9 @@ void rr_ui_input_end(void);
 bool rr_ui_event(SDL_Event *e);          /* true = the menu took it */
 void rr_ui_draw(bool *quit);             /* after the game picture, before present */
 bool rr_ui_quit_requested(void);
+bool rr_ui_chat_event(SDL_Event *e);    /* online: T opens the quick chat box; while it is open it takes every event (true = consumed) */
+bool rr_ui_chat_typing(void);           /* the quick chat box has the keyboard: the host releases the game's keys */
+bool rr_ui_chat_active(void);           /* the chat overlay is showing (typing, or a line in the last 10 s) */
 /* headless tests: drive the menu without an input device */
 enum { RR_UI_UP, RR_UI_DOWN, RR_UI_LEFT, RR_UI_RIGHT, RR_UI_OK, RR_UI_BACK, RR_UI_TABPREV, RR_UI_TABNEXT };
 void rr_ui_test_nav(int k);

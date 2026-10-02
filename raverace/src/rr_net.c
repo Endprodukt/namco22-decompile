@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include <SDL.h>                /* SDL_GetTicks (lazy-inits the timer: safe headless) */
 #include "rr_sock.h"
 #include "rr_netd.h"
@@ -36,7 +37,36 @@ enum { ST_OFFLINE, ST_CONNECTING, ST_LOBBY, ST_SESSION };
 static const char *st_name[] = { "OFFLINE", "CONNECTING", "LOBBY", "SESSION" };
 
 enum { T_HELLO = 0x01, T_WELCOME, T_ROSTER, T_READY, T_START, T_GO, T_LEAVE,
-       T_FRAME, T_PING, T_PONG, T_ACK, T_DISCOVER, T_ANNOUNCE };
+       T_FRAME, T_PING, T_PONG, T_ACK, T_DISCOVER, T_ANNOUNCE, T_CHAT,
+       T_ROOMS, T_ROOMLIST, T_RENAME, T_DELROOM };       /* rrn1-server rooms (NETPLAY.md "Rooms"): list, and a new name */
+
+static void leave_at_exit(void);
+static int exit_hook, srv_pending;               /* srv_pending: srv_text is set but not resolved yet */
+
+/* ---- chat: the last lines, oldest first; CHAT is relayed by the server to every member, the sender included ---- */
+#define CHAT_LINES 64
+#define CHAT_TEXT 96
+static char chat_buf[CHAT_LINES][8 + 17 + 2 + CHAT_TEXT + 1];      /* "[HH:MM] " + "Name: text" */
+static int chat_n, chat_head;                    /* lines stored, index of the oldest */
+static uint32_t chat_serial;                     /* grows with every line received (the UI's 'something new' test) */
+static void chat_push(const char *line)
+{
+    int i = (chat_head + chat_n) % CHAT_LINES;
+    if (chat_n == CHAT_LINES) { chat_head = (chat_head + 1) % CHAT_LINES; i = (chat_head + CHAT_LINES - 1) % CHAT_LINES; } else chat_n++;
+    time_t t = time(NULL); struct tm *tm = localtime(&t);                /* when it was posted: this computer's clock, as it arrived */
+    if (tm) snprintf(chat_buf[i], sizeof chat_buf[i], "[%02d:%02d] %s", tm->tm_hour, tm->tm_min, line);
+    else snprintf(chat_buf[i], sizeof chat_buf[i], "%s", line);
+    chat_serial++;
+}
+int rr_net_chat_count(void) { return chat_n; }
+uint32_t rr_net_chat_serial(void) { return chat_serial; }
+bool rr_net_chat_line(int i, char *out, size_t n)    /* 0 = oldest */
+{
+    if (i < 0 || i >= chat_n) return false;
+    snprintf(out, n, "%s", chat_buf[(chat_head + i) % CHAT_LINES]);
+    return true;
+}
+void rr_net_chat_clear(void) { chat_n = chat_head = 0; }
 
 static int st = ST_OFFLINE;
 static rr_sock_t sock = RR_SOCK_BAD;
@@ -119,16 +149,33 @@ static void send_msg(int type, uint16_t seq, const void *pl, int len)
     sendto(sock, (const char *)b, 10 + len, 0, (struct sockaddr *)&srv, srv_len);
 }
 
+/* ---- rooms (rrn1-server): the list the server last sent, and the room the next HELLO asks for ---- */
+#define MAX_ROOMS 20
+static struct { uint8_t id, state, players, mine; char name[32]; } rooms_[MAX_ROOMS];
+static int rooms_n;
+static uint32_t rooms_tx;
+static char hello_room_name[32];                /* the name for a room this HELLO creates (ROOM_NEW), "" = the server names it */
+static int hello_room_sel;                       /* 0 = the server picks, 1..254 = that room, 255 = a new room */
+static int switching;                            /* a room change is in flight: a refusal puts us back in the lobby instead of dropping us */
+#define ROOM_NEW 255
+
 static void send_hello(void)
 {
     /* printable UTF-8, <= 16 bytes (the contract); retransmits keep the seq
      * (set in rr_net_connect), the WELCOME answers with it */
-    uint8_t pl[17]; int n = 0;
+    uint8_t pl[48]; int n = 0;
     for (const char *c = my_name; *c && n < 16; c++)
         if (*c >= ' ' && (unsigned char)*c != 0x7F) pl[1 + n++] = (uint8_t)*c;
     if (!n) pl[1 + n++] = '?';
     pl[0] = (uint8_t)n;
-    send_msg(T_HELLO, hello_seq, pl, 1 + n);
+    int len = 1 + n;
+    if (hello_room_sel) pl[len++] = (uint8_t)hello_room_sel;        /* the optional room selector (old servers never see it: auto stays the 1-field HELLO) */
+    if (hello_room_sel == 255 && hello_room_name[0]) {              /* a new room: its name, len + bytes */
+        int k = 0;
+        for (const char *c = hello_room_name; *c && k < 24; c++) if ((unsigned char)*c >= ' ' && (unsigned char)*c != 0x7F) pl[len + 1 + k++] = (uint8_t)*c;
+        pl[len] = (uint8_t)k; len += 1 + k;
+    }
+    send_msg(T_HELLO, hello_seq, pl, len);
     hello_tx = now_ms();
 }
 
@@ -146,6 +193,7 @@ static void sock_open(void)
 
 static void fail(const char *why)                /* lost/unreachable: close, OFFLINE with the reason */
 {
+    { const char *e = getenv("RR_NET_DEBUG"); if (e && *e == '1') fprintf(stderr, "[NET] fail: %s\n", why); }
     snprintf(note, sizeof note, "%s", why);
     if (sock != RR_SOCK_BAD) { closesocket(sock); sock = RR_SOCK_BAD; }
     pend_ready = pend_start = 0;
@@ -155,6 +203,7 @@ static void fail(const char *why)                /* lost/unreachable: close, OFF
 
 bool rr_net_set_server(const char *host_port)
 {
+    srv_pending = 0;
     rr_sock_init();
     if (st != ST_OFFLINE) rr_net_disconnect();
     char host[100], port[8] = "27750";
@@ -167,7 +216,7 @@ bool rr_net_set_server(const char *host_port)
     } else snprintf(host, sizeof host, "%s", host_port);
     struct addrinfo hint, *res = NULL;
     memset(&hint, 0, sizeof hint);
-    hint.ai_family = AF_UNSPEC; hint.ai_socktype = SOCK_DGRAM;
+    hint.ai_family = AF_INET; hint.ai_socktype = SOCK_DGRAM;   /* IPv4 only: the servers are IPv4 UDP, and an AAAA lookup can stall the window on some Windows resolvers */
     if (getaddrinfo(host, port, &hint, &res) != 0 || !res) {
         snprintf(note, sizeof note, "bad server address '%s'", host_port);
         if (debug == 1) fprintf(stderr, "[NET] %s\n", note);
@@ -182,35 +231,82 @@ bool rr_net_set_server(const char *host_port)
 }
 const char *rr_net_server(void) { return srv_text; }
 
-void rr_net_set_name(const char *name)
+static void send_rename(void)
 {
+    uint8_t pl[17]; int n = 0;
+    for (const char *c = my_name; *c && n < 16; c++)
+        if (*c >= ' ' && (unsigned char)*c != 0x7F) pl[1 + n++] = (uint8_t)*c;
+    if (!n) pl[1 + n++] = '?';
+    pl[0] = (uint8_t)n;
+    send_msg(T_RENAME, 0, pl, 1 + n);
+}
+void rr_net_set_name(const char *name)           /* also while connected: the server updates the roster for everyone */
+{
+    char old[sizeof my_name]; snprintf(old, sizeof old, "%s", my_name);
     snprintf(my_name, sizeof my_name, "%s", name && *name ? name : "PLAYER");
+    if ((st == ST_LOBBY || st == ST_SESSION) && sock != RR_SOCK_BAD && strcmp(old, my_name)) send_rename();
 }
 const char *rr_net_name(void) { return my_name; }
+
+void rr_net_preset_server(const char *host_port)   /* remembered, NOT resolved: a DNS lookup at every boot would stall an offline start */
+{
+    snprintf(srv_text, sizeof srv_text, "%s", host_port ? host_port : "");
+    srv_pending = srv_text[0] != 0; srv_len = 0;
+}
 
 bool rr_net_connect(void)
 {
     if (!srv_text[0]) { snprintf(note, sizeof note, "no server set"); return false; }
+    if (srv_pending) {                           /* the first connect resolves the remembered address */
+        char hp[sizeof srv_text]; snprintf(hp, sizeof hp, "%s", srv_text);
+        srv_pending = 0;
+        if (!rr_net_set_server(hp)) return false;
+    }
     if (st != ST_OFFLINE) return true;
     note[0] = 0;
     ping_ms = -1;
+    hello_room_sel = 0; hello_room_name[0] = 0; switching = 0; rooms_n = 0;
     sock_open();
     if (sock == RR_SOCK_BAD) { snprintf(note, sizeof note, "socket failed"); return false; }
     set_state(ST_CONNECTING);
+    if (!exit_hook) { exit_hook = 1; atexit(leave_at_exit); }
     last_rx = now_ms();                          /* the connect attempt itself starts the silence clock */
     hello_seq = next_seq++;
     send_hello();
     return true;
 }
 
+static void send_leave(void)                     /* UDP: said twice, the server takes it idempotently */
+{
+    if (sock != RR_SOCK_BAD && (st == ST_LOBBY || st == ST_SESSION)) { send_msg(T_LEAVE, 0, NULL, 0); send_msg(T_LEAVE, 0, NULL, 0); }
+}
+static void leave_at_exit(void) { send_leave(); }   /* the game closing: free the slot now instead of after the 5 s timeout */
+static int exit_hook;
+
+bool rr_net_chat_send(const char *text)
+{
+    if (!text || (st != ST_LOBBY && st != ST_SESSION)) return false;
+    char t[CHAT_TEXT + 1]; size_t n = 0;
+    for (const char *c = text; *c && n < CHAT_TEXT; c++) if ((unsigned char)*c >= ' ' && (unsigned char)*c != 0x7F) t[n++] = *c;
+    if (n > 0) {                                     /* a cut in the middle of a UTF-8 character drops that character (a complete one stays) */
+        int k = (int)n - 1; while (k > 0 && ((unsigned char)t[k] & 0xC0) == 0x80) k--;
+        const unsigned char lead = (unsigned char)t[k];
+        if (lead >= 0xC0) { int need = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3 : 2; if ((int)n - k < need) n = (size_t)k; }
+    }
+    while (n && t[n - 1] == ' ') n--;
+    if (!n) return false;
+    send_msg(T_CHAT, 0, t, (int)n);
+    return true;
+}
+
 void rr_net_disconnect(void)
 {
     if (sock != RR_SOCK_BAD) {
-        if (st == ST_LOBBY || st == ST_SESSION) send_msg(T_LEAVE, 0, NULL, 0);
+        send_leave();
         closesocket(sock); sock = RR_SOCK_BAD;
     }
     pend_ready = pend_start = 0;
-    my_slot = -1; roster_n = 0; session_id = 0; ping_ms = -1;
+    my_slot = -1; roster_n = 0; session_id = 0; ping_ms = -1; rooms_n = 0; switching = 0;
     note[0] = 0;
     set_state(ST_OFFLINE);
 }
@@ -236,6 +332,45 @@ bool rr_net_roster(int i, char *name, size_t n, int *ready, int *self)
     return true;
 }
 int rr_net_roster_count(void) { return roster_n; }
+
+int rr_net_room_count(void) { return rooms_n; }
+bool rr_net_room(int i, int *id, int *state, int *players, int *mine, char *name, size_t n)
+{
+    if (i < 0 || i >= rooms_n) return false;
+    if (id) *id = rooms_[i].id;
+    if (state) *state = rooms_[i].state;
+    if (players) *players = rooms_[i].players;
+    if (mine) *mine = rooms_[i].mine;
+    if (name && n) snprintf(name, n, "%s", rooms_[i].name);
+    return true;
+}
+/* leave this room and ask the server for another (id 1..254) or a brand new one (ROOM_NEW); a refusal lands us in a free lobby */
+void rr_net_switch_room(int id)
+{
+    if (st != ST_LOBBY || sock == RR_SOCK_BAD) return;
+    if (id < 1 || id > 255) return;
+    send_leave();
+    pend_ready = pend_start = 0; my_slot = -1; roster_n = 0; session_id = 0;
+    hello_room_sel = id; switching = 1;
+    hello_seq = next_seq++;
+    last_rx = now_ms();
+    rr_net_chat_clear();
+    set_state(ST_CONNECTING);
+    send_hello();
+}
+void rr_net_new_room(const char *name)
+{
+    snprintf(hello_room_name, sizeof hello_room_name, "%s", name ? name : "");
+    rr_net_switch_room(ROOM_NEW);
+}
+void rr_net_delete_room(int id)                  /* only an empty, not racing room goes; the server answers with the fresh list */
+{
+    if ((st != ST_LOBBY && st != ST_SESSION) || sock == RR_SOCK_BAD || id < 1 || id > 254) return;
+    uint8_t b = (uint8_t)id;
+    send_msg(T_DELROOM, 0, &b, 1);
+    rooms_tx = 0;                                /* ask for the list again right away */
+}
+bool rr_net_switching(void) { return switching && st == ST_CONNECTING; }
 
 void rr_net_set_ready(int ready)
 {
@@ -356,9 +491,30 @@ static void on_message(int type, uint16_t seq, const uint8_t *p, int len)
 {
     switch (type) {
     case T_WELCOME:
+        if ((st == ST_LOBBY || st == ST_SESSION) && len >= 6 && p[0] == 0xFF) {
+            /* the server does not know us: it restarted, or timed us out (a long stall). Rejoin; a race that is
+             * running turns the HELLO away, and that is reported as the reason we are offline. */
+            fprintf(stderr, "[NET] the server dropped us (%s): rejoining\n", st == ST_SESSION ? "mid race" : "in the lobby");
+            const int was = st == ST_SESSION;
+            if (sock != RR_SOCK_BAD) { closesocket(sock); sock = RR_SOCK_BAD; }
+            pend_ready = pend_start = 0; my_slot = -1; roster_n = 0; session_id = 0;
+            set_state(ST_OFFLINE);
+            rr_ui_set_hint(was ? "Online: connection to the server was lost mid race - rejoining" : "Online: server restarted - rejoining", 240);
+            rr_net_connect();
+            return;
+        }
         if (st != ST_CONNECTING || seq != hello_seq || len < 6) return;
-        if (p[0] == 0xFF) { fail(p[1] == 1 ? "race in progress, try later" : "lobby full"); return; }
+        if (p[0] == 0xFF) {
+            if (switching) {                               /* that room is racing / full / gone: ask the server for a lobby instead of dropping out */
+                switching = 0; hello_room_sel = 0; hello_seq = next_seq++;
+                chat_push(p[1] == 1 ? "* that room is racing: you are in a free lobby instead" : "* that room is full or gone: you are in a free lobby instead");
+                send_hello();
+                return;
+            }
+            fail(p[1] == 1 ? "race in progress, try later" : "lobby full"); return;
+        }
         if (p[0] >= 8) return;
+        switching = 0;
         my_slot = p[0];
         roster_update(p, len, 6);
         fprintf(stderr, "[NET] joined %s as slot %d ('%s')\n", srv_text, my_slot, my_name);
@@ -369,8 +525,39 @@ static void on_message(int type, uint16_t seq, const uint8_t *p, int len)
         if (st == ST_SESSION && p[0] == 0) {               /* the server ended the session */
             session_id = 0;
             set_state(ST_LOBBY);
+            rr_ui_set_hint("Online: the race is over - back in the lobby", 300);
+            chat_push("* the race session ended: back in the lobby");
         }
         if (st == ST_LOBBY || st == ST_SESSION) roster_update(p, len, 5);
+        break;
+    case T_CHAT:
+        if (len >= 2 && (st == ST_LOBBY || st == ST_SESSION)) {
+            char line[17 + 2 + CHAT_TEXT + 1], who[24] = "";
+            for (int i = 0; i < roster_n; i++) if (roster[i].slot == p[0]) snprintf(who, sizeof who, "%s", roster[i].name);
+            if (!who[0]) snprintf(who, sizeof who, "P%d", p[0]);
+            int n = len - 1; if (n > CHAT_TEXT) n = CHAT_TEXT;
+            char tx[CHAT_TEXT + 1]; int k = 0;
+            for (int i = 0; i < n; i++) if (p[1 + i] >= ' ' && p[1 + i] != 0x7F) tx[k++] = (char)p[1 + i];
+            tx[k] = 0;
+            snprintf(line, sizeof line, "%s: %s", who, tx);
+            chat_push(line);
+            if (debug == 1) fprintf(stderr, "[NET] chat: %s\n", line);
+        }
+        break;
+    case T_ROOMLIST:
+        if (len >= 1 && (st == ST_LOBBY || st == ST_SESSION)) {
+            int n = p[0] > MAX_ROOMS ? MAX_ROOMS : p[0], off = 1, k = 0;
+            for (int i = 0; i < n; i++) {
+                if (off + 5 > len) break;
+                const int nl = p[off + 4];
+                if (off + 5 + nl > len) break;
+                rooms_[k].id = p[off]; rooms_[k].state = p[off + 1]; rooms_[k].players = p[off + 2]; rooms_[k].mine = p[off + 3];
+                const int m = nl > 31 ? 31 : nl; memcpy(rooms_[k].name, p + off + 5, (size_t)m); rooms_[k].name[m] = 0;
+                k++; off += 5 + nl;
+            }
+            rooms_n = k;
+            if (debug == 1) { fprintf(stderr, "[NET] rooms:"); for (int i = 0; i < k; i++) fprintf(stderr, "  #%d '%s' %d/8 %s%s", rooms_[i].id, rooms_[i].name, rooms_[i].players, rooms_[i].state ? "racing" : "lobby", rooms_[i].mine ? " (mine)" : ""); fprintf(stderr, "\n"); }
+        }
         break;
     case T_GO: on_go(seq, p, len); break;
     case T_FRAME: on_frame(p, len); break;
@@ -514,14 +701,31 @@ bool rr_net_hosting(void) { return rr_netd_running(); }
 void rr_net_poll(void)
 {
     if (debug < 0) { const char *e = getenv("RR_NET_DEBUG"); debug = e && *e == '1'; }
-    if (autostart < 0) { const char *e = getenv("RR_NET_AUTOSTART"); autostart = e && *e == '1'; }
+    if (autostart < 0) { const char *e = getenv("RR_NET_AUTOSTART"); autostart = e ? atoi(e) : 0; }   /* 1 = start once 2+ are ready; N>=2 = wait for N players */
     rr_netd_poll();                                        /* the built-in host (inert unless hosting) */
     disc_poll();                                           /* LAN search (inert unless searching) */
     if (st == ST_OFFLINE) return;                          /* inert: no client socket, no syscalls */
     uint32_t now = now_ms();
+    { static int say_lobby, say_race; static uint32_t say_t;     /* headless test: RR_NET_SAY=text sends one line in the lobby and one in the race */
+      static const char *say; static int say_init;
+      if (!say_init) { say_init = 1; say = getenv("RR_NET_SAY"); }
+      if (say && *say) {
+          if (st != ST_LOBBY && st != ST_SESSION) say_t = now;
+          else if (now - say_t > 1500) {
+              if (st == ST_LOBBY && !say_lobby) { say_lobby = 1; rr_net_chat_send(say); }
+              if (st == ST_SESSION && !say_race) { say_race = 1; rr_net_chat_send(say); }
+          }
+      } }
 
+    { static int t_init, t_room_done, t_name_done; static const char *t_room, *t_name;      /* headless tests: RR_NET_ROOM=new|<id> and RR_NET_RENAME=<name>, 1.5 s into the lobby */
+      if (!t_init) { t_init = 1; t_room = getenv("RR_NET_ROOM"); t_name = getenv("RR_NET_RENAME"); }
+      if (st == ST_LOBBY && now_ms() - t_state > 1500) {
+          if (t_room && *t_room && !t_room_done) { t_room_done = 1; if (!strncmp(t_room, "new", 3)) rr_net_new_room(t_room[3] == ':' ? t_room + 4 : NULL); else rr_net_switch_room(atoi(t_room)); }
+          else if (t_name && *t_name && !t_name_done) { t_name_done = 1; rr_net_set_name(t_name); }
+      } }
     uint8_t b[512];
     for (int i = 0; i < 32; i++) {                         /* bounded: never stall the frame */
+        if (sock == RR_SOCK_BAD) break;                    /* a message just failed the connection (e.g. "race in progress"): keep ITS reason, do not read a closed socket */
         struct sockaddr_storage from; socklen_t fl = sizeof from;
         int n = (int)recvfrom(sock, (char *)b, sizeof b, 0, (struct sockaddr *)&from, &fl);
         if (n < 0) {
@@ -545,9 +749,10 @@ void rr_net_poll(void)
         if (pend_ready && now - ready_tx >= RETRY_MS) { uint8_t v = (uint8_t)ready_val; send_msg(T_READY, ready_seq, &v, 1); ready_tx = now; }
         if (pend_start && now - start_tx >= RETRY_MS) { send_msg(T_START, start_seq, NULL, 0); start_tx = now; }
         if (now - last_ping_tx >= PING_MS) send_ping(now);
+        if (now - rooms_tx >= 2000) { send_msg(T_ROOMS, 0, NULL, 0); rooms_tx = now; }   /* the room list, kept fresh while the lobby is on screen */
         if (now - last_rx > DEAD_MS) { fail("connection lost"); break; }
         if (autostart) {                                   /* headless test: start once the lobby has settled at 2+ */
-            if (roster_n >= 2) {
+            if (roster_n >= (autostart > 1 ? autostart : 2)) {
                 if (!autostart_t0) autostart_t0 = now;
                 else if (now - autostart_t0 >= 2000 && !pend_start) { for (int i = 0; i < roster_n; i++) if (roster[i].slot == my_slot && !roster[i].ready && !pend_ready) rr_net_set_ready(1); if (all_ready()) rr_net_request_start(); }
             } else autostart_t0 = 0;
@@ -556,7 +761,7 @@ void rr_net_poll(void)
     case ST_SESSION:
         if (cab_reapply > 0) { rr_hw_set_link_cabinet(my_slot); cab_reapply--; }
         send_frame();                                      /* one staged link packet per frame */
-        if (now - last_frame_tx >= PING_MS && now - last_ping_tx >= PING_MS)
+        if (now - last_ping_tx >= PING_MS)
             send_ping(now);                                /* no car to report: PING is the liveness fallback */
         /* a dead server mid-race is NOT fatal: the game's own 8-frame peer
          * timeout drops the rivals and the race plays out alone */

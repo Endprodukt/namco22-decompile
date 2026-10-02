@@ -50,5 +50,6 @@ void ss22_input_neutral(void);                          /* release everything (t
 void ss22_input_motor(uint8_t b);
 /* the crosshair: where the gun is aimed in the 4:3 game picture, 0..1 each way; false = off-screen (nothing to draw) */
 bool ss22_input_aim(float *nx, float *ny);
+void ss22_input_rumble(uint16_t low, uint16_t high, uint32_t ms);   /* a short kick on every connected pad (engine/ss22_out.c: a gun's recoil) */
 void ss22_input_close(void);                            /* stop the wheel's force and let go of it (also run at exit) */
 #endif

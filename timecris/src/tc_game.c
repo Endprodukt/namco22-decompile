@@ -143,7 +143,7 @@ static void autoplay(long n, uint16_t *p, unsigned *wheel, unsigned *pedal1, uns
 static const eng_hud_mark hud_marks_none[] = { { 0, 0, 0 } };
 
 static const ss22_game game = {
-    .name = "Time Crisis", .tag = "TC", .lname = "tc", .logname = "timecris.log", .zip = "timecris.zip",
+    .name = "Time Crisis", .tag = "TC", .lname = "tc", .logname = "timecris.log", .zip = "timecris.zip", .recoil_mask = 0x0002,   /* MAME: "Time Crisis: 1 = gun solenoid" (mcuout1) */
     .out_gain = 2.4,                         /* not measured for this game yet (Dirt Dash 2.4, Tokyo Wars 1.4) */
     .prune_shadow = true,                         /* the test-mode watchdog restarts the program from inside an IRQ handler (jmp $110D0) */
     .snd_poll_sync = true,                        /* SUBCPU START WAIT: the MCU pulses its handshake bit inside one slice */

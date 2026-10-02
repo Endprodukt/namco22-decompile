@@ -3,6 +3,8 @@
  * lowest-free slot, WELCOME answers HELLO by seq, ROSTER on every lobby change, GO resent every
  * 500 ms until ACKed, FRAMEs relayed verbatim to the other members, 5 s liveness. Also answers
  * DISCOVER (LAN discovery) with ANNOUNCE. FRAMEs must be exactly 59 bytes (49 payload).
+ * Like the Rust server: CHAT is relayed (rate limited), a race ends by itself (last player gone, no FRAME for 90 s,
+ * or 15 min) and a PING from a non-member is answered with the short rejection WELCOME.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -15,20 +17,24 @@
 
 #define LIVENESS_MS 5000
 #define GO_RESEND_MS 500
+#define MAX_CHAT 96
+#define SESSION_MAX_MS (15u * 60u * 1000u)
+#define FRAME_IDLE_MS 90000u
 enum { T_HELLO = 0x01, T_WELCOME, T_ROSTER, T_READY, T_START, T_GO, T_LEAVE,
-       T_FRAME, T_PING, T_PONG, T_ACK, T_DISCOVER, T_ANNOUNCE };
+       T_FRAME, T_PING, T_PONG, T_ACK, T_DISCOVER, T_ANNOUNCE, T_CHAT };
 
 typedef struct {
     int used, ready, go_acked;
     struct sockaddr_storage a; socklen_t al;
     char name[17];
     uint32_t last_seen, last_go; uint16_t go_seq;
+    uint32_t chat_t; int chat_n;
 } slot_t;
 
 static rr_sock_t sk = RR_SOCK_BAD;
 static slot_t sl[8];
 static int state;                          /* 0 lobby, 1 race */
-static uint32_t sid, rng;
+static uint32_t sid, rng, sess_start, last_frame;
 static uint16_t nseq = 1;
 static char host_name[17] = "HOST";
 
@@ -117,9 +123,40 @@ static void on_start(void)
     int ready = 0; for (int i = 0; i < 8; i++) ready += sl[i].used && sl[i].ready;
     if (players() < 2 || ready != players()) return;               /* the race waits until everyone is Ready */
     state = 1;
+    sess_start = last_frame = now_ms();
     do { sid = rnd(); } while (!sid);
     fprintf(stderr, "[NETD] race start: session %08X, %d player(s)\n", sid, players());
     for (int i = 0; i < 8; i++) if (sl[i].used) { sl[i].go_seq = 0; sl[i].go_acked = 0; send_go(i); }
+    roster_changed();
+}
+
+static void on_chat(int slot, const uint8_t *p, int len)
+{
+    uint8_t pl[1 + MAX_CHAT + 4]; int n = 0;
+    for (int i = 0; i < len && n < MAX_CHAT; i++) {              /* printable bytes only (UTF-8 continuation bytes pass), cut at MAX_CHAT */
+        if (p[i] < ' ' || p[i] == 0x7F) continue;
+        pl[1 + n++] = p[i];
+    }
+    if (n > 0) {                                                 /* a cut in the middle of a UTF-8 character drops that character */
+        int k = n; while (k > 1 && (pl[k] & 0xC0) == 0x80) k--;
+        if (pl[k] >= 0xC0) { int need = pl[k] >= 0xF0 ? 4 : pl[k] >= 0xE0 ? 3 : 2; if (n - k + 1 < need) n = k - 1; }
+    }
+    while (n > 0 && pl[1] == ' ') { memmove(pl + 1, pl + 2, (size_t)--n); }
+    while (n > 0 && pl[n] == ' ') n--;
+    if (n <= 0) return;
+    uint32_t now = now_ms();
+    slot_t *s = &sl[slot];
+    if (now - s->chat_t >= 2000) { s->chat_t = now; s->chat_n = 0; }
+    if (++s->chat_n > 5) return;                                 /* 5 lines per 2 s per player */
+    pl[0] = (uint8_t)slot;
+    for (int i = 0; i < 8; i++) if (sl[i].used) sendm(&sl[i].a, sl[i].al, T_CHAT, 0, pl, 1 + n);
+}
+
+static void end_session(const char *why)
+{
+    fprintf(stderr, "[NETD] session over (%s); back to lobby\n", why);
+    state = 0; sid = 0;
+    for (int i = 0; i < 8; i++) if (sl[i].used) { sl[i].ready = 0; sl[i].go_seq = 0; sl[i].go_acked = 0; }
     roster_changed();
 }
 
@@ -141,9 +178,15 @@ static void on_datagram(const uint8_t *b, int n, const struct sockaddr_storage *
     case T_FRAME:
         if (slot < 0 || state != 1 || len != 49) break;             /* exactly 49 payload bytes (no oversize relay) */
         if ((uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24) != sid || p[8] != slot) break;
+        last_frame = now_ms();
         for (int i = 0; i < 8; i++) if (sl[i].used && i != slot) sendto(sk, (const char *)b, (size_t)n, 0, (const struct sockaddr *)&sl[i].a, sl[i].al);
         break;
-    case T_PING: if (len >= 4) sendm(a, al, T_PONG, 0, p, 4); break;
+    case T_PING:
+        if (len < 4) break;
+        if (slot >= 0) sendm(a, al, T_PONG, 0, p, 4);
+        else welcome(a, al, -1, 0);                                 /* not a member (restart / timed out): the short rejection says rejoin */
+        break;
+    case T_CHAT: if (slot >= 0) on_chat(slot, p, len); break;
     case T_DISCOVER: {                                              /* LAN discovery: who is hosting, and is there room */
         uint8_t pl[24]; int nl = (int)strlen(host_name);
         pl[0] = (uint8_t)state; pl[1] = (uint8_t)players(); pl[2] = (uint8_t)nl;
@@ -198,7 +241,9 @@ void rr_netd_poll(void)
             sl[i].used = 0; roster_changed();
         }
     if (state == 1) {
-        if (!players()) { state = 0; sid = 0; fprintf(stderr, "[NETD] session over, back to lobby\n"); }
+        if (!players()) end_session("everyone left");
+        else if (now - sess_start > SESSION_MAX_MS) end_session("time limit");
+        else if (now - last_frame > FRAME_IDLE_MS) end_session("no traffic");
         else for (int i = 0; i < 8; i++)
             if (sl[i].used && !sl[i].go_acked && now - sl[i].last_go >= GO_RESEND_MS) send_go(i);
     }

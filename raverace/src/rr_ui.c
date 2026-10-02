@@ -47,8 +47,15 @@ static bool open_, quit_req;
 static int rebinding = -1;             /* the action waiting for a key, or -1 */
 static int editing = -1;               /* the Online page's text row being edited (O_SERVER/O_NAME), or -1 */
 static char edit_buf[128];             /* its text while editing */
+#define E_ROOMNAME 101                /* the name box of the New room dialog */
+#define E_CHAT 100                    /* the chat line being typed (the Online window's Say box, or the quick chat on T) */
+static bool qchat;                     /* the in-game quick chat box is open (T while connected) */
+static bool chat_skip_t;               /* the T that opened it also arrives as text input: swallow it */
+static uint32_t chat_seen, chat_show_until;
+static bool newroom_open;               /* the New room dialog (name the room, Create) */
 static bool dlg_open;                  /* the floating Online play window */
-static int dlg_mode;                   /* 0 = Local LAN, 1 = Internet game */
+static char dlg_msg[96];               /* a one-line complaint shown in the Online window (cleared when it is dealt with) */
+static int dlg_mode = 1;               /* 0 = Local LAN, 1 = Internet game (the default: zonesync.net) */
 static bool was_session;               /* GO edge detector: close the menu when a race is armed */
 static float ui_scale = 1.0f;          /* drawable pixels per window unit (HiDPI) */
 
@@ -180,8 +187,34 @@ static void row_text(int t, int r, char *label, size_t ln, char *value, size_t v
 static void begin_edit(int r)
 {
     editing = r;
-    snprintf(edit_buf, sizeof edit_buf, "%s", r == O_SERVER ? g_cfg_net_server : g_cfg_net_name);
+    if (r == E_CHAT) edit_buf[0] = 0;
+    else if (r == E_ROOMNAME) snprintf(edit_buf, sizeof edit_buf, "%.16s's room", rr_net_name());
+    else snprintf(edit_buf, sizeof edit_buf, "%s", r == O_SERVER ? g_cfg_net_server : (g_cfg_net_name[0] ? g_cfg_net_name : rr_net_name()));
     SDL_StartTextInput();
+}
+static void stop_edit(void);
+/* click on a text box: it takes the keyboard, and any other box that had it lets go */
+static void focus_edit(int r) { if (editing != r) { stop_edit(); begin_edit(r); } }
+/* a text box: dark field, light border (blue while it has the keyboard), left-aligned text -- not a push button */
+static bool input_box(const char *text, bool active)
+{
+    struct nk_style_button b = ctx->style.button;
+    b.normal = nk_style_item_color(nk_rgb(22, 22, 26)); b.hover = nk_style_item_color(nk_rgb(30, 30, 36)); b.active = b.hover;
+    b.border_color = active ? nk_rgb(110, 165, 255) : nk_rgb(105, 105, 115); b.border = active ? 2.0f : 1.0f; b.rounding = 2.0f;
+    b.text_alignment = NK_TEXT_LEFT; b.text_normal = nk_rgb(235, 235, 235); b.text_hover = nk_rgb(255, 255, 255); b.text_active = nk_rgb(255, 255, 255);
+    return nk_button_label_styled(ctx, &b, text);
+}
+/* ONE way out of every text-entry state, so none can be left half-open (text input on, keys swallowed, nothing visible) */
+static void stop_edit(void)
+{
+    if (editing >= 0 || qchat) SDL_StopTextInput();
+    editing = -1; qchat = false; chat_skip_t = false;
+}
+/* ONE way to close the whole menu: dialogs, typing, key-rebinding all reset, so it opens clean the next time */
+static void close_menu(void)
+{
+    open_ = false; dlg_open = false; newroom_open = false; rebinding = -1;
+    stop_edit();
 }
 static int cyc(int v, int d, int n) { return ((v + d) % n + n) % n; }
 /* dir: 0 = Enter / click, -1 / +1 = Left / Right */
@@ -191,10 +224,10 @@ static void row_change(int t, int r, int dir)
     const int d = dir ? dir : 1;
     switch (t) {
     case T_FILE:
-        if (r == 1) { rr_host_set_test(!rr_host_test_on()); open_ = false; }        /* on to see the test menu; off to leave it */
+        if (r == 1) { rr_host_set_test(!rr_host_test_on()); close_menu(); }        /* on to see the test menu; off to leave it */
         else if (dir == 0) {
-            if (r == 0) open_ = false;
-            else if (r == 2) { rr_host_service_pulse(); open_ = false; }
+            if (r == 0) close_menu();
+            else if (r == 2) { rr_host_service_pulse(); close_menu(); }
             else quit_req = true;
         }
         break;
@@ -275,9 +308,69 @@ bool rr_ui_init(SDL_Window *win)
     return true;
 }
 void rr_ui_shutdown(void) { if (ctx) nk_sdl_shutdown(); ctx = NULL; }
-bool rr_ui_is_open(void) { return open_; }
+static void ui_debug_poll(void)                          /* RR_UI_DEBUG=1: print the menu state whenever it changes (the stress tests read it) */
+{
+    static int dbg = -1, last = -1;
+    if (dbg < 0) { const char *e = getenv("RR_UI_DEBUG"); dbg = e && *e == '1'; }
+    if (!dbg) return;
+    const int st = (open_ ? 1 : 0) | (dlg_open ? 2 : 0) | (editing >= 0 ? 4 : 0) | (qchat ? 8 : 0) | (rebinding >= 0 ? 16 : 0);
+    if (st != last) { last = st; fprintf(stderr, "[UI] open=%d dialog=%d editing=%d quickchat=%d rebinding=%d\n", st & 1, !!(st & 2), !!(st & 4), !!(st & 8), !!(st & 16)); }
+}
+bool rr_ui_is_open(void) { ui_debug_poll(); return open_; }
+bool rr_ui_chat_typing(void) { return qchat; }
+/* T while connected (menu closed) opens the quick chat box; while it is open it takes every event. True = consumed. */
+bool rr_ui_chat_event(SDL_Event *e)
+{
+    if (!ctx || open_) return false;
+    if (qchat) {
+        if (e->type == SDL_KEYUP && e->key.keysym.scancode == SDL_SCANCODE_T) chat_skip_t = false;      /* the opening T is released: its text event (if any) has come and gone */
+        if (e->type == SDL_KEYDOWN && !e->key.repeat && e->key.keysym.scancode == SDL_SCANCODE_T && !edit_buf[0] && !chat_skip_t) { stop_edit(); return true; }   /* T on an empty box closes it (a T in the middle of a message is a letter) */
+        rr_ui_event(e); return true;
+    }
+    if (e->type == SDL_KEYDOWN && !e->key.repeat && e->key.keysym.scancode == SDL_SCANCODE_T && rr_net_connected()) {
+        qchat = true; editing = E_CHAT; edit_buf[0] = 0; chat_skip_t = true; SDL_StartTextInput();
+        return true;
+    }
+    return false;
+}
+/* true while the chat overlay has something to show: typing, or a line arrived in the last 10 s */
+bool rr_ui_chat_active(void)
+{
+    if (!ctx || open_) return false;
+    const uint32_t ser = rr_net_chat_serial();
+    const bool race = rr_net_session_active();
+    if (ser != chat_seen) {
+        chat_seen = ser; chat_show_until = SDL_GetTicks() + 10000;
+        if (race && !qchat) rr_ui_set_hint("New chat message  -  press T to read and reply", 150);    /* in a race the chat stays closed */
+    }
+    if (!rr_net_connected()) { if (qchat) stop_edit(); return false; }
+    if (race) return qchat;                                                    /* in a race: only while the player has it open (T) */
+    return qchat || (rr_net_chat_count() > 0 && (int32_t)(chat_show_until - SDL_GetTicks()) > 0);
+}
+static void chat_overlay(int ww, int wh)
+{
+    const int n = rr_net_chat_count();
+    int show = qchat ? 8 : 5; if (show > n) show = n;
+    const float h = 12 + show * 20 + (qchat ? 30 : 0);
+    if (h < 30) return;
+    const float w = ww < 520 ? (float)ww - 16 : 500.0f;
+    if (nk_begin(ctx, "chat", nk_rect(8, (float)wh - h - 44, w, h), NK_WINDOW_NO_SCROLLBAR)) {
+        for (int i = n - show; i < n; i++) {
+            char ln[128];
+            if (!rr_net_chat_line(i, ln, sizeof ln)) continue;
+            nk_layout_row_dynamic(ctx, 18, 1);
+            nk_label(ctx, ln, NK_TEXT_LEFT);
+        }
+        if (qchat) {
+            char f[140]; snprintf(f, sizeof f, "> %.96s_   (Enter sends, T or Esc closes)", edit_buf);
+            nk_layout_row_dynamic(ctx, 24, 1);
+            nk_label(ctx, f, NK_TEXT_LEFT);
+        }
+    }
+    nk_end(ctx);
+}
 bool rr_ui_quit_requested(void) { return quit_req; }
-void rr_ui_set_open(bool on) { open_ = on; if (!on) dlg_open = false; rebinding = -1; if (!on && editing >= 0) { editing = -1; SDL_StopTextInput(); } if (on && row >= nrows(tab)) row = 0; }
+void rr_ui_set_open(bool on) { if (!on) { close_menu(); return; } open_ = true; rebinding = -1; if (row >= nrows(tab)) row = 0; }
 void rr_ui_input_begin(void) { if (ctx) nk_input_begin(ctx); }
 void rr_ui_input_end(void)   { if (ctx) nk_input_end(ctx); }
 
@@ -293,7 +386,7 @@ static void nav(int k)
     case K_LEFT:  if (row < 0) tab = cyc(tab, -1, T_N); else if (has_value(tab, row)) row_change(tab, row, -1); break;
     case K_RIGHT: if (row < 0) tab = cyc(tab, +1, T_N); else if (has_value(tab, row)) row_change(tab, row, +1); break;
     case K_OK:    if (row < 0) row = 0; else row_change(tab, row, 0); break;
-    case K_BACK:  if (dlg_open) dlg_open = false; else open_ = false; break;
+    case K_BACK:  if (newroom_open) { newroom_open = false; stop_edit(); } else if (dlg_open) { dlg_open = false; stop_edit(); } else close_menu(); break;
     case K_TABPREV: tab = cyc(tab, -1, T_N); row = 0; break;
     case K_TABNEXT: tab = cyc(tab, +1, T_N); row = 0; break;
     }
@@ -302,26 +395,35 @@ static void nav(int k)
 
 bool rr_ui_event(SDL_Event *e)
 {
-    if (!ctx || !open_) return false;
+    if (!ctx || (!open_ && !qchat)) return false;
     if (editing >= 0) {                            /* the Online page's modal text entry: every event is ours */
         if (e->type == SDL_TEXTINPUT) {
+            if (chat_skip_t) { chat_skip_t = false; if ((e->text.text[0] == 't' || e->text.text[0] == 'T') && !e->text.text[1]) return true; }
             const size_t bl = strlen(edit_buf), tl = strlen(e->text.text);
-            const size_t cap = editing == O_NAME ? 16 : sizeof edit_buf - 2;   /* names are 16 bytes on the wire */
+            const size_t cap = editing == O_NAME ? 16 : editing == E_ROOMNAME ? 24 : editing == E_CHAT ? 96 : sizeof edit_buf - 2;   /* names are 16 bytes on the wire */
             if (bl + tl <= cap) memcpy(edit_buf + bl, e->text.text, tl + 1);
         } else if (e->type == SDL_KEYDOWN) {
             switch (e->key.keysym.scancode) {
             case SDL_SCANCODE_RETURN: case SDL_SCANCODE_KP_ENTER:
+                if (editing == E_CHAT) {                                       /* send; the Online window keeps the box open, the quick chat closes */
+                    if (edit_buf[0]) rr_net_chat_send(edit_buf);
+                    edit_buf[0] = 0;                                           /* the panel stays open: T on an empty box or Esc closes it */
+                    break;
+                }
+                if (editing == E_ROOMNAME) { rr_net_new_room(edit_buf); newroom_open = false; stop_edit(); break; }   /* Enter creates the room */
                 if (editing == O_SERVER) rr_host_set_net_server(edit_buf);     /* apply + save + resolve */
                 else rr_host_set_net_name(edit_buf);
-                editing = -1; SDL_StopTextInput();
+                stop_edit();
                 break;
-            case SDL_SCANCODE_ESCAPE: editing = -1; SDL_StopTextInput(); break;
+            case SDL_SCANCODE_ESCAPE: stop_edit(); break;
             case SDL_SCANCODE_BACKSPACE: {
                 size_t l = strlen(edit_buf);
                 if (l) { edit_buf[--l] = 0; while (l > 0 && (edit_buf[l - 1] & 0xC0) == 0x80) edit_buf[--l] = 0; }  /* whole UTF-8 char */
                 break; }
             default: break;
             }
+        } else if (e->type == SDL_MOUSEMOTION || e->type == SDL_MOUSEBUTTONDOWN || e->type == SDL_MOUSEBUTTONUP || e->type == SDL_MOUSEWHEEL) {
+            nk_sdl_handle_event(e);                    /* typing never blocks the mouse: Send / Close / Ready / the X stay clickable */
         }
         return true;
     }
@@ -367,7 +469,7 @@ bool rr_ui_event(SDL_Event *e)
 }
 /* RR_MENU_TEST and friends drive the menu without an input device */
 void rr_ui_test_nav(int k) { nav(k); kb_moved = true; }
-void rr_ui_test_goto(int t, int r) { tab = t; row = r; if (editing >= 0) { editing = -1; SDL_StopTextInput(); } }
+void rr_ui_test_goto(int t, int r) { tab = t; row = r; stop_edit(); }
 
 /* ---- drawing ---------------------------------------------------------------- */
 static void labelf(nk_flags align, const char *fmt, ...)
@@ -386,7 +488,7 @@ bool rr_ui_hint_active(void) { return ctx && !open_ && hint_left > 0 && hint_tex
  * found on the network) or Internet game (type a server IP or URL). Text entry reuses the modal editor above. */
 static void online_dialog(int ww, int wh)
 {
-    const float w = 460 < ww - 8 ? 460.0f : (float)ww - 8, h = 360 < wh - 40 ? 360.0f : (float)wh - 40;
+    const float w = 460 < ww - 8 ? 460.0f : (float)ww - 8, h = 410 < wh - 40 ? 410.0f : (float)wh - 40;
     if (nk_begin(ctx, "Online play", nk_rect(((float)ww - w) / 2, ((float)wh - h) / 2, w, h),
                  NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE)) {
         static const char *modes[2] = { "Local LAN", "Internet game" };
@@ -396,6 +498,17 @@ static void online_dialog(int ww, int wh)
         nk_label(ctx, "Game type", NK_TEXT_LEFT);
         if (!conn) dlg_mode = nk_combo(ctx, modes, 2, dlg_mode, 26, nk_vec2(200, 80));
         else nk_label(ctx, modes[dlg_mode], NK_TEXT_LEFT);
+
+        /* your name (shown to the others in the lobby; changeable any time, also inside the lobby) */
+        nk_layout_row_template_begin(ctx, 28);
+        nk_layout_row_template_push_static(ctx, 86);
+        nk_layout_row_template_push_dynamic(ctx);
+        nk_layout_row_template_end(ctx);
+        nk_label(ctx, "Your name:", NK_TEXT_LEFT);
+        char nbx[64];
+        if (editing == O_NAME) snprintf(nbx, sizeof nbx, "%.16s_   (Enter saves)", edit_buf);
+        else snprintf(nbx, sizeof nbx, "%.16s     (click to change)", rr_net_name());
+        if (input_box(nbx, editing == O_NAME)) focus_edit(O_NAME);
 
         if (!conn && dlg_mode == 0) {                       /* ---- Local LAN ---- */
             nk_layout_row_dynamic(ctx, 28, 2);
@@ -413,53 +526,205 @@ static void online_dialog(int ww, int wh)
                 if (nk_button_label(ctx, line)) { rr_host_set_net_server(ad); rr_net_connect(); }
             }
         } else if (!conn) {                                 /* ---- Internet game ---- */
+            /* 1. the public server: one click, no typing */
             nk_layout_row_dynamic(ctx, 20, 1);
-            nk_label(ctx, "Server IP or URL  (host or host:port, default port 27750)", NK_TEXT_LEFT);
+            nk_label(ctx, "Public server:", NK_TEXT_LEFT);
+            nk_layout_row_dynamic(ctx, 34, 1);
+            if (nk_button_label(ctx, "Connect to ZoneSync  (zonesync.net)")) {
+                stop_edit(); dlg_msg[0] = 0;
+                if (hosting) rr_net_host_stop();
+                if (rr_net_set_server("zonesync.net")) rr_net_connect();
+            }
+            /* 2. a custom server: its own address box and its own Connect button */
+            nk_layout_row_dynamic(ctx, 8, 1); nk_spacing(ctx, 1);
+            nk_layout_row_dynamic(ctx, 20, 1);
+            nk_label(ctx, "Custom server  (host or host:port, default port 27750):", NK_TEXT_LEFT);
+            const bool is_custom = g_cfg_net_server[0] && strcmp(g_cfg_net_server, "zonesync.net") != 0;
             char fld[130];
             if (editing == O_SERVER) snprintf(fld, sizeof fld, "%.90s_", edit_buf);
-            else snprintf(fld, sizeof fld, "%.90s", g_cfg_net_server[0] ? g_cfg_net_server : "(click to type an address)");
+            else if (is_custom) snprintf(fld, sizeof fld, "%.90s", g_cfg_net_server);
+            else snprintf(fld, sizeof fld, "(click here, type an address, press Enter)");
             nk_layout_row_dynamic(ctx, 28, 1);
-            if (nk_button_label(ctx, fld) && editing < 0) begin_edit(O_SERVER);
-            if (editing == O_SERVER) { nk_layout_row_dynamic(ctx, 18, 1); nk_label(ctx, "Enter applies, Esc cancels", NK_TEXT_LEFT); }
-            nk_layout_row_dynamic(ctx, 28, 1);
-            if (nk_button_label(ctx, "Connect") && editing < 0 && g_cfg_net_server[0]) {
-                if (hosting) rr_net_host_stop();
-                rr_host_set_net_server(g_cfg_net_server);
-                rr_net_connect();
+            if (input_box(fld, editing == O_SERVER)) { if (editing != O_SERVER) { focus_edit(O_SERVER); if (!is_custom) edit_buf[0] = 0; } }   /* a text box; it starts empty unless a custom address is already saved */
+            if (editing == O_SERVER) { nk_layout_row_dynamic(ctx, 18, 1); nk_label(ctx, "Enter saves the address, Esc cancels", NK_TEXT_LEFT); }
+            nk_layout_row_dynamic(ctx, 30, 1);
+            if (nk_button_label(ctx, "Connect to custom server")) {
+                bool resolved = false;
+                if (editing == O_SERVER && edit_buf[0]) { rr_host_set_net_server(edit_buf); resolved = true; }   /* the box is still open: use what was typed */
+                stop_edit();
+                if (g_cfg_net_server[0] && strcmp(g_cfg_net_server, "zonesync.net") != 0) {
+                    if (hosting) rr_net_host_stop();
+                    if (resolved || rr_net_set_server(g_cfg_net_server)) rr_net_connect();
+                } else snprintf(dlg_msg, sizeof dlg_msg, "Type an address in the box above first.");
             }
-        } else {                                            /* ---- in a lobby ---- */
-            const int rc = rr_net_roster_count();
-            nk_layout_row_dynamic(ctx, 20, 1);
-            nk_label(ctx, "Players:", NK_TEXT_LEFT);
-            for (int i = 0; i < rc; i++) {
-                char nm[32]; int rdy, self;
-                if (!rr_net_roster(i, nm, sizeof nm, &rdy, &self)) continue;
-                nk_layout_row_dynamic(ctx, 20, 1);
-                labelf(NK_TEXT_LEFT, "  %d: %s%s%s", i, nm, self ? " (you)" : "", rdy ? " [ready]" : "");
-            }
-            nk_layout_row_dynamic(ctx, 28, 3);
-            if (nk_button_label(ctx, online_self_ready() ? "Not ready" : "Ready")) rr_net_set_ready(!online_self_ready());
-            if (nk_button_label(ctx, "Start race")) rr_net_request_start();   /* refused until everyone is Ready */
-            if (nk_button_label(ctx, hosting ? "Stop hosting" : "Disconnect")) { if (hosting) rr_net_host_stop(); else rr_net_disconnect(); }
         }
+        if (dlg_msg[0] && !conn) { nk_layout_row_dynamic(ctx, 20, 1); nk_label(ctx, dlg_msg, NK_TEXT_LEFT); }
         nk_layout_row_dynamic(ctx, 20, 1);
         labelf(NK_TEXT_LEFT, "Status: %s", st);
         nk_layout_row_dynamic(ctx, 28, 1);
-        if (nk_button_label(ctx, "Close")) dlg_open = false;
+        if (nk_button_label(ctx, "Close")) { dlg_open = false; dlg_msg[0] = 0; stop_edit(); }
     }
     nk_end(ctx);
+}
+
+/* THE LOBBY WINDOW: opens by itself as soon as a connection is made (hosted or joined). A sidebar of the players in the room
+ * (ready flags, "you" marked) beside the chat; the Say box below takes the keyboard straight away. Replaces the Online play
+ * window while connected; Close hides it (the menu row "Host / join a game..." brings it back). */
+static void lobby_window(int ww, int wh)
+{
+    const float w = ww - 16 < 1100 ? (float)ww - 16 : 1100.0f, h = wh - 16 < 820 ? (float)wh - 16 : 820.0f;     /* nearly the whole window: the chat is the main thing */
+    if (nk_begin(ctx, "Lobby", nk_rect(((float)ww - w) / 2, ((float)wh - h) / 2, w, h), NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE | NK_WINDOW_CLOSABLE)) {
+        const bool hosting = rr_net_hosting(), joining = rr_net_switching();
+        { static int t = -1; if (t < 0) t = getenv("RR_UI_NEWROOM") != NULL; if (t == 1) { t = 2; newroom_open = true; focus_edit(E_ROOMNAME); } }   /* test hook: open the New room dialog once */
+        char st[128]; rr_net_status(st, sizeof st);
+        /* WHERE YOU ARE: the room you are in, in green, and the server beneath it */
+        char myroom[48] = ""; int myplayers = 0;
+        for (int i = 0, n = rr_net_room_count(); i < n; i++) { int mine, pl; char nm[40]; if (rr_net_room(i, NULL, NULL, &pl, &mine, nm, sizeof nm) && mine) { snprintf(myroom, sizeof myroom, "%s", nm); myplayers = pl; } }
+        nk_layout_row_dynamic(ctx, 24, 1);
+        if (joining) nk_label_colored(ctx, "Joining the room...", NK_TEXT_LEFT, nk_rgb(240, 200, 90));
+        else if (myroom[0]) { char t[96]; snprintf(t, sizeof t, "You are in:  %s   (%d/8 players)", myroom, myplayers); nk_label_colored(ctx, t, NK_TEXT_LEFT, nk_rgb(120, 220, 130)); }
+        else nk_label_colored(ctx, hosting ? "You are hosting a LAN game" : "You are in the lobby", NK_TEXT_LEFT, nk_rgb(120, 220, 130));
+        nk_layout_row_dynamic(ctx, 18, 1);
+        labelf(NK_TEXT_LEFT, "%s   -   %s", hosting ? "this computer (LAN)" : (rr_net_server()[0] ? rr_net_server() : "online"), st);
+
+        /* your name: click the box, type, Enter (everyone in the room sees the change at once) */
+        nk_layout_row_template_begin(ctx, 28);
+        nk_layout_row_template_push_static(ctx, 86);
+        nk_layout_row_template_push_dynamic(ctx);
+        nk_layout_row_template_end(ctx);
+        nk_label(ctx, "Your name:", NK_TEXT_LEFT);
+        char nb[64];
+        if (editing == O_NAME) snprintf(nb, sizeof nb, "%.16s_   (Enter saves, Esc cancels)", edit_buf);
+        else snprintf(nb, sizeof nb, "%.16s     (click to change)", rr_net_name());
+        if (input_box(nb, editing == O_NAME)) focus_edit(O_NAME);
+
+        /* THE LAYOUT: a sidebar on the left (the players, then the rooms table with Join / New room) and the CHAT on the right at the
+         * full height -- it is the main thing, so it gets everything the sidebar does not */
+        const float gh = h - 215 > 220 ? h - 215 : 220;
+        const int lines = (int)((gh - 36) / 22), rc = rr_net_roster_count(), nrooms = rr_net_room_count();
+        nk_layout_row_template_begin(ctx, gh);
+        nk_layout_row_template_push_static(ctx, w < 560 ? 250 : 320);
+        nk_layout_row_template_push_dynamic(ctx);
+        nk_layout_row_template_end(ctx);
+        if (nk_group_begin(ctx, "Sidebar", NK_WINDOW_NO_SCROLLBAR)) {
+            const float ph = gh * 0.30f < 84 ? 84 : gh * 0.30f, rh = gh - ph - 50;
+            nk_layout_row_dynamic(ctx, ph, 1);
+            if (nk_group_begin(ctx, "Players", NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+                for (int i = 0; i < rc; i++) {
+                    char nm[32]; int rdy, self;
+                    if (!rr_net_roster(i, nm, sizeof nm, &rdy, &self)) continue;
+                    nk_layout_row_dynamic(ctx, 20, 1);
+                    labelf(NK_TEXT_LEFT, "%s%s%s", nm, self ? " (you)" : "", rdy ? "  [ready]" : "");
+                }
+                nk_group_end(ctx);
+            }
+            /* THE ROOMS TABLE: every room on the server, one row each, with its own JOIN button. Your room is marked ">" and says HERE. */
+            nk_layout_row_dynamic(ctx, rh, 1);
+            if (nk_group_begin(ctx, "Rooms", NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+                if (!nrooms) { nk_layout_row_dynamic(ctx, 20, 1); nk_label(ctx, hosting ? "(a LAN game is one room)" : "(waiting for the list...)", NK_TEXT_LEFT); }
+                for (int i = 0; i < nrooms; i++) {
+                    int id, state, players, mine; char nm[40];
+                    if (!rr_net_room(i, &id, &state, &players, &mine, nm, sizeof nm)) continue;
+                    nk_layout_row_template_begin(ctx, 28);
+                    nk_layout_row_template_push_dynamic(ctx); nk_layout_row_template_push_static(ctx, 34); nk_layout_row_template_push_static(ctx, 58); nk_layout_row_template_push_static(ctx, 28);
+                    nk_layout_row_template_end(ctx);
+                    char rn[48]; snprintf(rn, sizeof rn, "%s%s", mine ? "> " : "", nm);
+                    if (mine) nk_label_colored(ctx, rn, NK_TEXT_LEFT, nk_rgb(120, 220, 130)); else nk_label(ctx, rn, NK_TEXT_LEFT);
+                    labelf(NK_TEXT_LEFT, "%d/8", players);
+                    if (mine) nk_label_colored(ctx, "HERE", NK_TEXT_CENTERED, nk_rgb(120, 220, 130));
+                    else if (state) nk_label_colored(ctx, "racing", NK_TEXT_CENTERED, nk_rgb(220, 140, 120));
+                    else if (players >= 8) nk_label_colored(ctx, "full", NK_TEXT_CENTERED, nk_rgb(220, 140, 120));
+                    else {                                                    /* open: a green Join button on the row */
+                        struct nk_style_button gb = ctx->style.button;
+                        gb.normal = nk_style_item_color(nk_rgb(40, 120, 55)); gb.hover = nk_style_item_color(nk_rgb(55, 150, 70)); gb.active = gb.hover;
+                        gb.text_normal = nk_rgb(255, 255, 255); gb.text_hover = nk_rgb(255, 255, 255); gb.text_active = nk_rgb(255, 255, 255);
+                        if (nk_button_label_styled(ctx, &gb, "Join") && !hosting) rr_net_switch_room(id);
+                    }
+                    if (players == 0 && !mine && !state && nrooms > 1) {              /* an empty room can be deleted */
+                        struct nk_style_button rb = ctx->style.button;
+                        rb.normal = nk_style_item_color(nk_rgb(120, 45, 45)); rb.hover = nk_style_item_color(nk_rgb(160, 60, 60)); rb.active = rb.hover;
+                        rb.text_normal = nk_rgb(255, 255, 255); rb.text_hover = nk_rgb(255, 255, 255); rb.text_active = nk_rgb(255, 255, 255);
+                        if (nk_button_label_styled(ctx, &rb, "X") && !hosting) rr_net_delete_room(id);
+                    } else nk_spacing(ctx, 1);
+                }
+                nk_group_end(ctx);
+            }
+            nk_layout_row_dynamic(ctx, 30, 1);
+            if (nk_button_label(ctx, "+ New room...") && !hosting) { newroom_open = true; focus_edit(E_ROOMNAME); }
+            nk_group_end(ctx);
+        }
+        if (nk_group_begin(ctx, "Chat", NK_WINDOW_BORDER | NK_WINDOW_TITLE)) {
+            const int n = rr_net_chat_count(), show = n < lines ? n : lines;
+            if (!n) { nk_layout_row_dynamic(ctx, 22, 1); nk_label(ctx, "No messages yet - say hello.", NK_TEXT_LEFT); }
+            for (int i = n - show; i < n; i++) {
+                char ln[128];
+                if (!rr_net_chat_line(i, ln, sizeof ln)) continue;
+                nk_layout_row_dynamic(ctx, 22, 1);
+                nk_label(ctx, ln, NK_TEXT_LEFT);
+            }
+            nk_group_end(ctx);
+        }
+
+        /* the entry box and its Send button (Enter sends too) */
+        char say[140];
+        if (editing == E_CHAT) snprintf(say, sizeof say, "%.96s_", edit_buf);
+        else snprintf(say, sizeof say, "Type a message...");
+        nk_layout_row_template_begin(ctx, 28);
+        nk_layout_row_template_push_dynamic(ctx);
+        nk_layout_row_template_push_static(ctx, 90);
+        nk_layout_row_template_end(ctx);
+        if (input_box(say, editing == E_CHAT)) focus_edit(E_CHAT);
+        if (nk_button_label(ctx, "Send")) {
+            if (editing == E_CHAT && edit_buf[0]) { rr_net_chat_send(edit_buf); edit_buf[0] = 0; }     /* keeps the box open for the next line */
+            else focus_edit(E_CHAT);
+        }
+        nk_layout_row_dynamic(ctx, 28, 4);
+        if (nk_button_label(ctx, online_self_ready() ? "Not ready" : "Ready")) rr_net_set_ready(!online_self_ready());
+        if (nk_button_label(ctx, "Start race")) rr_net_request_start();       /* refused until everyone is Ready */
+        if (nk_button_label(ctx, hosting ? "Stop hosting" : "Disconnect")) { if (hosting) rr_net_host_stop(); else rr_net_disconnect(); }
+        if (nk_button_label(ctx, "Close")) { dlg_open = false; stop_edit(); }
+    }
+    nk_end(ctx);
+    if (newroom_open) {                                       /* THE NEW ROOM DIALOG: name it, Create (Enter) or Cancel (Esc) */
+        const float dw = ww - 16 < 400 ? (float)ww - 16 : 400.0f, dh = 150;
+        if (nk_begin(ctx, "New room", nk_rect(((float)ww - dw) / 2, ((float)wh - dh) / 2, dw, dh), NK_WINDOW_BORDER | NK_WINDOW_TITLE | NK_WINDOW_MOVABLE)) {
+            nk_layout_row_dynamic(ctx, 20, 1);
+            nk_label(ctx, "Name your room (others will see it in the list):", NK_TEXT_LEFT);
+            char rb[64];
+            if (editing == E_ROOMNAME) snprintf(rb, sizeof rb, "%.24s_", edit_buf);
+            else snprintf(rb, sizeof rb, "(click to type a name)");
+            nk_layout_row_dynamic(ctx, 30, 1);
+            if (input_box(rb, editing == E_ROOMNAME)) focus_edit(E_ROOMNAME);
+            nk_layout_row_dynamic(ctx, 30, 2);
+            if (nk_button_label(ctx, "Create")) { rr_net_new_room(editing == E_ROOMNAME ? edit_buf : ""); newroom_open = false; stop_edit(); }
+            if (nk_button_label(ctx, "Cancel")) { newroom_open = false; stop_edit(); }
+        }
+        nk_end(ctx);
+        nk_window_set_focus(ctx, "New room");
+    }
+    if (nk_window_is_hidden(ctx, "Lobby")) {                  /* the title-bar close box: really close it, so it can open again later */
+        nk_window_close(ctx, "Lobby"); dlg_open = false; stop_edit();
+    }
 }
 
 void rr_ui_draw(bool *quit)
 {
     if (quit_req) *quit = true;
+
     /* GO armed a race: leave the menu so the player can coin up */
     const bool sess = rr_net_session_active();
     if (sess && !was_session) {
-        if (editing >= 0) { editing = -1; SDL_StopTextInput(); }
-        open_ = false; dlg_open = false;
+        close_menu();
     }
     was_session = sess;
+    if (editing >= 0 && !qchat) {                            /* a text box only exists while it is on screen: never leave typing mode behind a closed window */
+        const bool lobby = dlg_open && (rr_net_connected() || rr_net_switching()) && !sess;
+        const bool ok = open_ && (editing == E_ROOMNAME ? newroom_open : editing == E_CHAT ? lobby : (tab == T_ONLINE || dlg_open));
+        if (!ok) stop_edit();
+    }
+    { static bool auto_done;                                 /* once per connection: the first time the menu is open while connected, the lobby window opens and the chat box takes the keyboard */
+      if (!rr_net_connected()) { if (!rr_net_switching()) auto_done = false; }
+      else if (open_ && !auto_done && !sess) { auto_done = true; dlg_open = true; if (editing < 0) begin_edit(E_CHAT); } }
     if (rr_ui_hint_active()) {
         hint_left--;
         int hw, hh; SDL_GetWindowSize(uwin, &hw, &hh);
@@ -469,10 +734,17 @@ void rr_ui_draw(bool *quit)
             nk_label(ctx, hint_text, NK_TEXT_CENTERED);
         }
         nk_end(ctx);
+        chat_overlay(hw, hh);
         nk_sdl_render(NK_ANTI_ALIASING_ON);
         return;
     }
-    if (!ctx || !open_) return;
+    if (ctx && !open_) {                         /* menu closed: only the chat overlay (the quick chat box, recent lines) */
+        int cw, ch; SDL_GetWindowSize(uwin, &cw, &ch);
+        chat_overlay(cw, ch);
+        nk_sdl_render(NK_ANTI_ALIASING_ON);
+        return;
+    }
+    if (!ctx) return;
     int ww, wh;
     SDL_GetWindowSize(uwin, &ww, &wh);
     /* THE MENU BAR across the top of the window, as in Prop Cycle. The chosen
@@ -568,7 +840,7 @@ void rr_ui_draw(bool *quit)
 
     }
     nk_end(ctx);
-    if (dlg_open) online_dialog(ww, wh);
+    if (dlg_open) { if ((rr_net_connected() || rr_net_switching()) && !rr_net_session_active()) lobby_window(ww, wh); else online_dialog(ww, wh); }
 
     nk_sdl_render(NK_ANTI_ALIASING_ON);        /* scales window units to the drawable itself */
 }

@@ -63,6 +63,7 @@ typedef struct ss22_game {
     const char *zip;                         /* the MAME set the game unpacks them from */
     bool prune_shadow;                  /* the program restarts itself from inside an interrupt handler (a test-mode watchdog): drop the shadow return frames it abandoned (engine/lift_cpu.c rr_shadow_prune) */
     bool snd_poll_sync;                      /* the 68K polling the sound CPU's handshake word lets the MCU run a little (a boot-time SUBCPU wait that would otherwise miss a pulse the MCU raises and clears within one slice); 0 = off, the other games are unchanged */
+    uint16_t recoil_mask;                    /* MCU output bits (mcuout0..15) that are a gun's recoil solenoid: each rising edge rumbles the game pad (engine/ss22_out.c); 0 = none */
     double out_gain;                         /* speaker gain for THIS game's chip levels (engine/audio_out.h); 0 = the shared default x6, which is Rave Racer's */
     const char *const *more_zips;            /* NULL-terminated: further zips of the same set searched for chips, e.g. a split set's clone zip ("dirtdasha.zip"); or NULL */
     void (*entry)(void);                     /* the 68K's reset entry in the lifted program: never returns */

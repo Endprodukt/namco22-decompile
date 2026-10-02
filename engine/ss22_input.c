@@ -184,6 +184,12 @@ void ss22_input_close(void) { eng_ffb_close(); }
 typedef struct { SDL_GameController *gc; SDL_JoystickID id; } pad_dev;
 static pad_dev pads[MAX_DEV];
 
+/* a short kick on every connected game pad (the gun's recoil solenoid; a Steam Deck's own motors included). A pad without rumble ignores it. */
+void ss22_input_rumble(uint16_t low, uint16_t high, uint32_t ms)
+{
+    for (int i = 0; i < MAX_DEV; i++) if (pads[i].gc) SDL_GameControllerRumble(pads[i].gc, low, high, ms);
+}
+
 static int pad_find(SDL_JoystickID id)
 {
     for (int i = 0; i < MAX_DEV; i++) if (pads[i].gc && pads[i].id == id) return i;

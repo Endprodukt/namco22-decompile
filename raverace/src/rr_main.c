@@ -353,7 +353,7 @@ int main(int argc, char **argv)
     { const char *e = getenv("RR_LINK_CABINET");              /* temporary: the lobby/config will drive this */
       if (e) rr_hw_set_link_cabinet(atoi(e)); }
     if (g_cfg_net_name[0]) rr_net_set_name(g_cfg_net_name);        /* the saved lobby name (windowed: from rr_controls.cfg) */
-    if (windowed && g_cfg_net_server[0]) rr_net_set_server(g_cfg_net_server);  /* remembered, but connecting stays a menu action */
+    if (windowed && g_cfg_net_server[0]) rr_net_preset_server(g_cfg_net_server);  /* remembered, but connecting stays a menu action */
     { const char *srv = getenv("RR_NET_SERVER");            /* headless/test bootstrap: connect at boot (env wins over cfg) */
       if (srv && *srv) {
           const char *nm = getenv("RR_NET_NAME");

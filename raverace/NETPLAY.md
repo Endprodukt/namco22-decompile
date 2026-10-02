@@ -56,6 +56,7 @@ unused and SHOULD be sent as 0; receivers MUST ignore it.
 | 0x0B  | ACK     | either         | no       |
 | 0x0C  | DISCOVER | client→LAN broadcast | no  |
 | 0x0D  | ANNOUNCE | host→client   | no (answers DISCOVER) |
+| 0x0E  | CHAT    | client→server→clients | no |
 
 ### Shared sub-structure: roster
 
@@ -161,6 +162,16 @@ The receiver drops frames with a wrong session_id, and drops frames whose
 dedup/reordering guard; comparison is plain integer comparison, no wrap
 handling — a race does not produce 2^32 frames).
 
+### 0x0E CHAT (client→server, relayed to every member including the sender)
+
+Client → server payload: the text, 1–96 bytes of printable UTF-8 (control characters are stripped, the text is
+trimmed and cut at 96 bytes on a character boundary). Empty after cleaning = ignored.
+
+Server → clients payload: `u8 sender_slot` followed by the cleaned text. It goes to every member (the sender
+included, so what a player sees is what was relayed) in the lobby AND during a race. Unreliable, no ACK. A member may
+send at most **5 lines per 2 seconds**; further lines in the window are dropped. CHAT from an address that holds no
+slot is ignored. Receivers display `name: text`, taking the name from the roster entry for `sender_slot`.
+
 ### 0x09 PING (client→server)
 
 | Offset | Size | Field          | Value                |
@@ -174,6 +185,11 @@ handling — a race does not produce 2^32 frames).
 | 0      | 4    | client_time_ms | echoed verbatim from PING |
 
 RTT = now − echoed value. PING/PONG also serve as liveness traffic.
+
+**PING from an address that holds no slot** (the server restarted, or timed this client out) is answered with the short
+rejection WELCOME (`your_slot = 0xFF`, empty roster, 17 bytes) instead of a PONG. A client that receives a WELCOME with
+`your_slot = 0xFF` while it believes it is in the lobby or a race MUST treat itself as dropped and send a new HELLO
+(the reference client does, automatically). Clients ping at least once a second in the lobby AND during a race.
 
 ### 0x0B ACK (either direction)
 
@@ -285,3 +301,38 @@ client                                server
 - `flags` and the ACK-for-other-types cases are reserved for v2 (e.g.
   reliable FRAME snapshots, host migration). Receivers must ignore unknown
   flags bits and unknown message types rather than erroring.
+
+
+## Robustness rules (server)
+
+- **A race session ends by itself** and the members go back to the lobby (a ROSTER with `state = 0`, ready flags
+  cleared, everyone still connected) when: the last player leaves or times out; **no valid FRAME has arrived for 90 s**
+  (players keep pinging but nobody is racing); or the session is **15 minutes** old. Both limits are options
+  (`--frame-idle-sec`, `--max-session-min`). A new race can then be started (START) at once. Joins are turned away
+  (`WELCOME 0xFF, state 1`) only while a session is running.
+- A client that closes the game sends LEAVE (twice, it is UDP and idempotent); one that crashes is dropped by the 5 s
+  liveness timeout. Neither leaves a slot held.
+- Datagrams from addresses without a slot are charged to the per-IP budget (30/s) only when they earn a reply (HELLO,
+  PING, DISCOVER); a stranger's FRAMEs are dropped for free, so a restarted server's ghosts cannot starve their own
+  PING.
+
+## Rooms (rrn1-server)
+
+One port serves many independent rooms. A room is a whole lobby (8 slots, its own roster, chat and race); a race in one room never
+blocks another. A new player's HELLO goes to the fullest room that is still in its lobby, and opens a new room when every room is
+racing or full (`--max-rooms N`, default 16; empty rooms close, room 0 stays). The wire protocol is unchanged, so the
+"race in progress" rejection now only happens when all rooms are racing and the room limit is reached. A known address always
+reaches its own room, so a rejoin after a restart lands in a fresh lobby as before.
+
+### Room messages (all optional: an old client never sends them and never needs them)
+
+| Type | Name | Direction | Payload |
+|------|------|-----------|---------|
+| 0x0F | ROOMS | client->server | empty; answered with ROOMLIST (also for an address that holds no slot, rate limited like PING) |
+| 0x10 | ROOMLIST | server->client | `count`, then per room: `id u8`, `state u8` (0 lobby, 1 racing), `players u8`, `mine u8` (the asker is in it), `name_len u8`, `name` (<= 24 bytes). At most 20 rooms |
+| 0x11 | RENAME | client->server | `name_len`, `name`, as HELLO: the roster is re-broadcast with the new name |
+
+**HELLO room selector.** After the name, a HELLO may carry one more byte: `0` or absent = the server picks (the fullest lobby, or a new
+room); `1..254` = join that room (refused with the usual rejection WELCOME if it is racing, full or gone); `255` = create a new
+room, optionally followed by `len` and a room name (<= 24 bytes). A new room with no name is listed as "<first player>'s room".
+To change rooms a client sends LEAVE and then a HELLO with the selector. The largest ROOMLIST (20 rooms) is 10 + 1 + 20 x 29 bytes.

@@ -19,6 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "ss22_game.h"
+#include "ss22_out.h"
 #include "ss22_host.h"
 #include <sys/stat.h>
 #include "win_startup.h"
@@ -287,6 +288,7 @@ void rr_tick(void)
     if (rr_frame % 120 == 0) ss22_eeprom_save();
     if (dump_every && rr_frame % dump_every == 0) dump_state();
     sweep_tick();
+    ss22_out_poll(ss22_snd_outputs());                     /* the cabinet's outputs (lamps, the gun solenoid): MAME's network output + pad rumble */
     if (video_on) {
         double t1 = ftime_on ? ft_now() : 0;
         ss22_video_prepare();                              /* the master's finished list, before this vblank starts the next */
@@ -297,7 +299,7 @@ void rr_tick(void)
         }
         if (ss22_host_active() && !ss22_host_frame()) {
             const bool restart = ss22_host_restart_requested();       /* File > Restart: power-cycle the cabinet */
-            ss22_eeprom_save(); ss22_snd_close(); ss22_input_close(); ss22_host_close(); fprintf(stderr, "[%s] quit at frame %u\n", g_ss22_game->tag, rr_frame);
+            ss22_eeprom_save(); ss22_snd_close(); ss22_out_close(); ss22_input_close(); ss22_host_close(); fprintf(stderr, "[%s] quit at frame %u\n", g_ss22_game->tag, rr_frame);
 #ifndef _WIN32
             if (restart) { fflush(NULL); execv("/proc/self/exe", g_argv); perror("restart"); }
 #else

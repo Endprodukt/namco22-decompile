@@ -11,4 +11,6 @@ services:
     environment:
       RRN1_PORT: ${RRN1_PORT:-27750}
       RRN1_NAME: ${RRN1_NAME:-Rave Racer}        # 16 bytes at most, shown in the LAN game list
-      RRN1_MAX_PER_IP: ${RRN1_MAX_PER_IP:-4}
+      RRN1_MAX_PER_IP: ${RRN1_MAX_PER_IP:-8}
+      RRN1_MAX_ROOMS: ${RRN1_MAX_ROOMS:-16}       # independent lobbies/races on the one port (players pick, join or create rooms in the game)
+      RRN1_ROOM_TTL_MIN: ${RRN1_ROOM_TTL_MIN:-10}  # an empty room stays listed this many minutes
