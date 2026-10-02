@@ -7,6 +7,54 @@ int rd_hook(uint32_t ep);
 extern int rd_stop_on;
 int rd_jump_stop(uint32_t t, uint32_t at);   /* src/rd: stop a checked run at its tail jump */
 
+/* ---- FUN_0006afd2 @ 0x06AFD2 ---- */
+void L_6AFD2_at(uint32_t pc_)
+{
+  uint64_t uf200 = 0;
+  uint64_t uf300 = 0;
+  uint64_t u10400 = 0;
+  uint64_t u10500 = 0;
+  uint64_t u49b00 = 0;
+  uint64_t u49c00 = 0;
+  if (pc_ == 0x6AFD2U && rd_on && rd_hook(0x6AFD2U)) return;
+resume_:
+  switch (pc_) {
+  case 0x6AFD2U: goto A_6AFD2;
+  case 0x6AFDAU: goto A_6AFDA;
+  case 0x6AFE0U: goto A_6AFE0;
+  case 0x6AFE6U: goto A_6AFE6;
+  default: rr_jump(pc_, pc_); return;   /* another function owns it */
+  }
+A_6AFD2: RR_INS(0x6AFD2U); /* move.l #0x6afec,(0xb0,A5) */
+  P_6AFD2_0: u49c00 = (0x6AFECULL) & 0xFFFFFFFFULL;
+  P_6AFD2_1: uf200 = (RG4(0x34) + 0xB0ULL) & 0xFFFFFFFFULL;
+  P_6AFD2_2: uf300 = ((u49c00 & 0xFFFFFFFFULL)) & 0xFFFFFFFFULL;
+  P_6AFD2_3: MWR4((uint32_t)(uf200 & 0xFFFFFFFFULL), (uf300 & 0xFFFFFFFFULL));
+  P_6AFD2_4: RS1(0x44, (SX4((u49c00 & 0xFFFFFFFFULL)) < SX4(0x0ULL)));
+  P_6AFD2_5: RS1(0x45, ((u49c00 & 0xFFFFFFFFULL) == 0x0ULL));
+  P_6AFD2_6: RS1(0x46, 0x0ULL);
+  P_6AFD2_7: RS1(0x47, 0x0ULL);
+  A_END_6AFD2: ;
+A_6AFDA: RR_INS(0x6AFDAU); /* move.w #0x1,(0x48,A5) */
+  P_6AFDA_0: u49b00 = (0x1ULL) & 0xFFFFULL;
+  P_6AFDA_1: u10400 = (RG4(0x34) + 0x48ULL) & 0xFFFFFFFFULL;
+  P_6AFDA_2: u10500 = ((u49b00 & 0xFFFFULL)) & 0xFFFFULL;
+  P_6AFDA_3: MWR2((uint32_t)(u10400 & 0xFFFFFFFFULL), (u10500 & 0xFFFFULL));
+  P_6AFDA_4: RS1(0x44, (SX2((u49b00 & 0xFFFFULL)) < SX2(0x0ULL)));
+  P_6AFDA_5: RS1(0x45, ((u49b00 & 0xFFFFULL) == 0x0ULL));
+  P_6AFDA_6: RS1(0x46, 0x0ULL);
+  P_6AFDA_7: RS1(0x47, 0x0ULL);
+  A_END_6AFDA: ;
+A_6AFE0: RR_INS(0x6AFE0U); /* lea (0x236688).l,A0 */
+  P_6AFE0_0: RS4(0x20, 0x236688ULL);
+  A_END_6AFE0: ;
+A_6AFE6: RR_INS(0x6AFE6U); /* bra.l 0x000039c0 */
+  P_6AFE6_0: { RR_POLL(); if (rd_stop_on && rd_jump_stop(0x39C0U, 0x6AFE6U)) return; L_39C0(); return; }
+  A_END_6AFE6: ;
+  if (rd_stop_on && rd_jump_stop(0x6AFECU, 0x6AFE6U)) return;
+  L_6AFEC(); return;
+}
+
 /* ---- FUN_0006afec @ 0x06AFEC ---- */
 void L_6AFEC_at(uint32_t pc_)
 {
@@ -58600,55 +58648,5 @@ A_7242E: RR_INS(0x7242EU); /* bra.l 0x0000450e */
   A_END_7242E: ;
   if (rd_stop_on && rd_jump_stop(0x72434U, 0x7242EU)) return;
   L_72434(); return;
-}
-
-/* ---- FUN_00072434 @ 0x072434 ---- */
-void L_72434_at(uint32_t pc_)
-{
-  uint64_t u9300 = 0;
-  uint64_t u9400 = 0;
-  uint64_t uf000 = 0;
-  uint64_t uf200 = 0;
-  uint64_t uf300 = 0;
-  uint64_t u49c00 = 0;
-  if (pc_ == 0x72434U && rd_on && rd_hook(0x72434U)) return;
-resume_:
-  switch (pc_) {
-  case 0x72434U: goto A_72434;
-  case 0x72438U: goto A_72438;
-  case 0x7243EU: goto A_7243E;
-  case 0x72442U: goto A_72442;
-  default: rr_jump(pc_, pc_); return;   /* another function owns it */
-  }
-A_72434: RR_INS(0x72434U); /* movea.l (0x104,A5),A0 */
-  P_72434_0: u9300 = (RG4(0x34) + 0x104ULL) & 0xFFFFFFFFULL;
-  P_72434_1: u9400 = ((uint64_t)MRD4((uint32_t)(u9300 & 0xFFFFFFFFULL))) & 0xFFFFFFFFULL;
-  P_72434_2: RS4(0x20, (u9400 & 0xFFFFFFFFULL));
-  A_END_72434: ;
-A_72438: RR_INS(0x72438U); /* move.l #0x72448,-(A0) */
-  P_72438_0: u49c00 = (0x72448ULL) & 0xFFFFFFFFULL;
-  P_72438_1: RS4(0x20, RG4(0x20) - 0x4ULL);
-  P_72438_2: uf000 = ((u49c00 & 0xFFFFFFFFULL)) & 0xFFFFFFFFULL;
-  P_72438_3: MWR4((uint32_t)RG4(0x20), (uf000 & 0xFFFFFFFFULL));
-  P_72438_4: RS1(0x44, (SX4((u49c00 & 0xFFFFFFFFULL)) < SX4(0x0ULL)));
-  P_72438_5: RS1(0x45, ((u49c00 & 0xFFFFFFFFULL) == 0x0ULL));
-  P_72438_6: RS1(0x46, 0x0ULL);
-  P_72438_7: RS1(0x47, 0x0ULL);
-  A_END_72438: ;
-A_7243E: RR_INS(0x7243EU); /* move.l A0,(0x104,A5) */
-  P_7243E_0: u49c00 = (RG4(0x20)) & 0xFFFFFFFFULL;
-  P_7243E_1: uf200 = (RG4(0x34) + 0x104ULL) & 0xFFFFFFFFULL;
-  P_7243E_2: uf300 = ((u49c00 & 0xFFFFFFFFULL)) & 0xFFFFFFFFULL;
-  P_7243E_3: MWR4((uint32_t)(uf200 & 0xFFFFFFFFULL), (uf300 & 0xFFFFFFFFULL));
-  P_7243E_4: RS1(0x44, (SX4((u49c00 & 0xFFFFFFFFULL)) < SX4(0x0ULL)));
-  P_7243E_5: RS1(0x45, ((u49c00 & 0xFFFFFFFFULL) == 0x0ULL));
-  P_7243E_6: RS1(0x46, 0x0ULL);
-  P_7243E_7: RS1(0x47, 0x0ULL);
-  A_END_7243E: ;
-A_72442: RR_INS(0x72442U); /* bra.l 0x00031960 */
-  P_72442_0: { RR_POLL(); if (rd_stop_on && rd_jump_stop(0x31960U, 0x72442U)) return; L_31960(); return; }
-  A_END_72442: ;
-  if (rd_stop_on && rd_jump_stop(0x72448U, 0x72442U)) return;
-  L_72448(); return;
 }
 

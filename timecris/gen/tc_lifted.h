@@ -9021,6 +9021,8 @@ void L_585B0_at(uint32_t pc);   /* FUN_000585b0 */
 static inline void L_585B0(void) { L_585B0_at(0x585B0U); }
 void L_585C0_at(uint32_t pc);   /* FUN_000585c0 */
 static inline void L_585C0(void) { L_585C0_at(0x585C0U); }
+void L_585E8_at(uint32_t pc);   /* FUN_000585e8 */
+static inline void L_585E8(void) { L_585E8_at(0x585E8U); }
 void L_58618_at(uint32_t pc);   /* FUN_00058618 */
 static inline void L_58618(void) { L_58618_at(0x58618U); }
 void L_5862C_at(uint32_t pc);   /* FUN_0005862c */
@@ -20125,6 +20127,12 @@ void L_8DB98_at(uint32_t pc);   /* FUN_0008db98 */
 static inline void L_8DB98(void) { L_8DB98_at(0x8DB98U); }
 void L_8DBD0_at(uint32_t pc);   /* FUN_0008dbd0 */
 static inline void L_8DBD0(void) { L_8DBD0_at(0x8DBD0U); }
+void L_8DC12_at(uint32_t pc);   /* FUN_0008dc12 */
+static inline void L_8DC12(void) { L_8DC12_at(0x8DC12U); }
+void L_8DC54_at(uint32_t pc);   /* FUN_0008dc54 */
+static inline void L_8DC54(void) { L_8DC54_at(0x8DC54U); }
+void L_8DC72_at(uint32_t pc);   /* FUN_0008dc72 */
+static inline void L_8DC72(void) { L_8DC72_at(0x8DC72U); }
 void L_8DC86_at(uint32_t pc);   /* FUN_0008dc86 */
 static inline void L_8DC86(void) { L_8DC86_at(0x8DC86U); }
 void L_8DCB2_at(uint32_t pc);   /* FUN_0008dcb2 */
@@ -20135,6 +20143,8 @@ void L_8DCDA_at(uint32_t pc);   /* FUN_0008dcda */
 static inline void L_8DCDA(void) { L_8DCDA_at(0x8DCDAU); }
 void L_8DCEE_at(uint32_t pc);   /* thunk_FUN_0008dc86 */
 static inline void L_8DCEE(void) { L_8DCEE_at(0x8DCEEU); }
+void L_8DCF0_at(uint32_t pc);   /* FUN_0008dcf0 */
+static inline void L_8DCF0(void) { L_8DCF0_at(0x8DCF0U); }
 void L_8DD04_at(uint32_t pc);   /* thunk_FUN_0008dc86 */
 static inline void L_8DD04(void) { L_8DD04_at(0x8DD04U); }
 void L_8DD06_at(uint32_t pc);   /* FUN_0008dd06 */
