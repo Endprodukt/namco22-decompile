@@ -857,6 +857,7 @@ int main(int argc, char* argv[]) {
     { extern int g_test_timehold; const char *e = getenv("PROPCYCL_TEST_TIMEHOLD");
       g_test_timehold = (e && *e && *e != '0'); }
     { extern int g_sndsweep_hold; const char *e = getenv("PROPCYCL_SNDSWEEP"); g_sndsweep_hold = e ? atoi(e) : 0; }
+    { extern int g_sndrand; const char *e = getenv("PROPCYCL_SNDRAND"); g_sndrand = e ? atoi(e) : 0; }
     { extern int g_test_pass; const char *e = getenv("PROPCYCL_TEST_PASS");
       g_test_pass = e ? atoi(e) : 0; }
     /* Read here, never mid-game: getenv() in the frame loop faults (row 40). */

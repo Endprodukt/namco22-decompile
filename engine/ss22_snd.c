@@ -298,8 +298,10 @@ void ss22_snd_slice(void)
 
 bool ss22_snd_faulted(void) { return faulted; }
 void ss22_snd_set_output(bool on) { out_live = on; }
+void (*ss22_input_rec_hook)(uint16_t, unsigned, unsigned, unsigned);         /* --record (engine/ss22_run.c): every input write, in frame order */
 void ss22_snd_inputs(uint16_t p, unsigned wheel, unsigned pedal1, unsigned pedal2)
 {
+    if (ss22_input_rec_hook) ss22_input_rec_hook(p, wheel, pedal1, pedal2);
     const ss22_snd_cfg *c = &g_ss22_game->snd;
     pressed = p;
     adc[0] = (uint16_t)(wheel & 0x3FF);

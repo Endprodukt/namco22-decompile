@@ -138,6 +138,46 @@ static uint32_t slice, serial_acc;
 bool g_rr_in_vblank;
 static int vblank_slices;
 
+/* --sndsweep HOLD[:PASS[:SLOT_LO:SLOT_HI[:CMD_MAX[:FROM]]]]: the sound driver's coverage harness (engine/ss22_run.c's, for this board). Rave Racer's
+ * mailbox is the same as the Super 22 games' but at shared 0x1000: command words 0x1000 + slot*2, parameter words 0x1100..0x117E. PASS 0 writes
+ * every command 0x4000|c and 0xC000|c into every slot in turn; PASS 1-4 fill the parameters with 0x0000/0x4000/0x8000/0xFFFF first; PASS >= 5
+ * writes random commands and parameters (xorshift seeded by PASS). Run on rr_sndoracle with SND_COV=<file> (tools/grind_snd.sh). */
+static struct { int on, hold, pass, slot_lo, slot_hi, cmd_max, from; } sweep;
+static void sweep_arg(const char *a)
+{
+    sweep.on = 1; sweep.hold = 6; sweep.pass = 0; sweep.slot_lo = 0; sweep.slot_hi = 31; sweep.cmd_max = 0x7F; sweep.from = 1000;
+    sscanf(a, "%d:%d:%d:%d:%i:%d", &sweep.hold, &sweep.pass, &sweep.slot_lo, &sweep.slot_hi, &sweep.cmd_max, &sweep.from);
+    if (sweep.hold < 1) sweep.hold = 1;
+}
+#define SWEEP_BASE 0x1000
+static void sweep_put16(uint32_t off, uint16_t v) { g_rr.shared[SWEEP_BASE + off] = (uint8_t)(v >> 8); g_rr.shared[SWEEP_BASE + off + 1] = (uint8_t)v; }
+static uint32_t sweep_rnd(uint64_t *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; return (uint32_t)(*s >> 16); }
+static void sweep_tick(void)
+{
+    static const uint16_t par[5] = { 0, 0x0000, 0x4000, 0x8000, 0xFFFF };
+    static long prev_slot = -1;
+    if (!sweep.on || frame < (uint32_t)sweep.from || (frame - (uint32_t)sweep.from) % (uint32_t)sweep.hold) return;
+    if (sweep.pass >= 5) {
+        static uint64_t rs;
+        if (!rs) rs = 0x9E3779B97F4A7C15ull * (uint64_t)sweep.pass;
+        for (int i = 0; i < 4; i++) {
+            uint32_t sl = (uint32_t)sweep.slot_lo + sweep_rnd(&rs) % (uint32_t)(sweep.slot_hi - sweep.slot_lo + 1);
+            uint32_t on = sweep_rnd(&rs), fl = sweep_rnd(&rs), c = sweep_rnd(&rs) % (uint32_t)(sweep.cmd_max + 1);
+            sweep_put16(sl * 2, (on & 3) ? (uint16_t)(((fl & 1) ? 0xC000u : 0x4000u) | c) : 0);
+        }
+        for (uint32_t o = 0x100; o < 0x180; o += 2) { uint32_t v = sweep_rnd(&rs); if (v & 1) sweep_put16(o, (uint16_t)(v >> 1)); }
+        return;
+    }
+    const long per_slot = 2L * (sweep.cmd_max + 1), nslots = sweep.slot_hi - sweep.slot_lo + 1;
+    const long n = (long)((frame - (uint32_t)sweep.from) / (uint32_t)sweep.hold);
+    if (prev_slot >= 0) sweep_put16((uint32_t)prev_slot * 2, 0);
+    if (n >= nslots * per_slot) { if (n == nslots * per_slot) fprintf(stderr, "[SNDSWEEP] done at frame %u\n", frame); prev_slot = -1; return; }
+    const long slot = sweep.slot_lo + n / per_slot, k = n % per_slot;
+    if (sweep.pass > 0) for (uint32_t o = 0x100; o < 0x180; o += 2) sweep_put16(o, par[sweep.pass]);
+    sweep_put16((uint32_t)slot * 2, (uint16_t)(((k & 1) ? 0xC000u : 0x4000u) | (unsigned)(k >> 1)));
+    prev_slot = slot;
+}
+
 void rr_tick(void)
 {
     rd_budget_out();
@@ -161,6 +201,7 @@ void rr_tick(void)
     if (serial_acc >= 60 * SLICES) { serial_acc -= 60 * SLICES; rr_dsp_serial(); }
     if (++slice % SLICES) return;
     frame++;
+    sweep_tick();
     double tv0 = perf_on ? now_ms() : 0;
     if (g_rr_gl && gl_ok) {                        /* screen update at the end of the frame */
         rr_gl_prepare(rr_dsp_slave_active());
@@ -264,6 +305,7 @@ int main(int argc, char **argv)
             if (i + 1 < argc && argv[i + 1][0] >= '1' && argv[i + 1][0] <= '9' && !argv[i + 1][1]) windowed = atoi(argv[++i]);
         }
         else if (!strcmp(argv[i], "--perf")) perf_on = 1;
+        else if (!strcmp(argv[i], "--sndsweep") && i + 1 < argc) sweep_arg(argv[++i]);
         else if (!strcmp(argv[i], "--perflog") && i + 1 < argc) { perflog = fopen(argv[++i], "w"); perf_on = perflog != NULL; }
         else if (!strcmp(argv[i], "--gl")) use_gl = 1;
 #ifdef RR_ORACLE

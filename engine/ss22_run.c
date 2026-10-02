@@ -98,10 +98,57 @@ static void add_press(const char *spec)
         if (!strcmp(n, g_ss22_game->presses[i].name)) { presses[npress++] = (press_t){ g_ss22_game->presses[i].bit, f, len }; return; }
     fprintf(stderr, "[%s] unknown button %s\n", g_ss22_game->tag, n);
 }
+/* --record FILE / --replay FILE: a player's session, exactly. Every input write (the buttons word, the wheel and pedal A-D values and the light
+ * gun's port values) is logged with the frame it lands on -- they all land at the frame boundary, where update_inputs() and the window's input
+ * both run -- and the recording starts with the EEPROM image the session booted with. A replay applies the same values at the same frames from
+ * the same EEPROM, so a headless run (any build: the oracles with SND_COV, the trace build) re-plays the session instruction for instruction:
+ * the tool for "it crashed in stage 2" when no script reaches stage 2. */
+static FILE *rec_f, *rep_f;
+static struct { uint32_t f; unsigned p, w, p1, p2, gx, gy, goff; } rep_ev; static int rep_have;
+static unsigned rec_last[7] = { ~0u, ~0u, ~0u, ~0u, ~0u, ~0u, ~0u };
+static void rec_hook(uint16_t p, unsigned w, unsigned p1, unsigned p2)
+{
+    const unsigned v[7] = { p, w, p1, p2, g_ss22_gun_x, g_ss22_gun_y, g_ss22_gun_off };
+    if (!memcmp(v, rec_last, sizeof v)) return;
+    memcpy(rec_last, v, sizeof v);
+    fprintf(rec_f, "%u %X %X %X %X %X %X %X\n", rr_frame, v[0], v[1], v[2], v[3], v[4], v[5], v[6]);
+}
+static void rec_open(const char *path)
+{
+    rec_f = fopen(path, "w");
+    if (!rec_f) { fprintf(stderr, "[%s] cannot write %s\n", g_ss22_game->tag, path); return; }
+    fprintf(rec_f, "SS22REC 1 %s ", g_ss22_game->tag);
+    for (unsigned i = 0; i < SS22_EEPROM_SIZE; i++) fprintf(rec_f, "%02X", g_ss22.eeprom[i]);
+    fprintf(rec_f, "\n");
+    setvbuf(rec_f, NULL, _IOLBF, 0);                       /* a crash still leaves the inputs up to it on disk */
+    extern void (*ss22_input_rec_hook)(uint16_t, unsigned, unsigned, unsigned);
+    ss22_input_rec_hook = rec_hook;
+    fprintf(stderr, "[%s] recording the session's inputs to %s\n", g_ss22_game->tag, path);
+}
+static void rep_read(void) { rep_have = rep_f && fscanf(rep_f, "%u %X %X %X %X %X %X %X", &rep_ev.f, &rep_ev.p, &rep_ev.w, &rep_ev.p1, &rep_ev.p2, &rep_ev.gx, &rep_ev.gy, &rep_ev.goff) == 8; }
+static bool rep_open(const char *path)
+{
+    rep_f = fopen(path, "r");
+    char tag[32]; int ver;
+    if (!rep_f || fscanf(rep_f, "SS22REC %d %31s ", &ver, tag) != 2 || strcmp(tag, g_ss22_game->tag)) { fprintf(stderr, "[%s] %s is not a %s recording\n", g_ss22_game->tag, path, g_ss22_game->tag); return false; }
+    for (unsigned i = 0; i < SS22_EEPROM_SIZE; i++) { unsigned b; if (fscanf(rep_f, "%2X", &b) != 1) return false; g_ss22.eeprom[i] = (uint8_t)b; }
+    rep_read();
+    fprintf(stderr, "[%s] replaying %s (EEPROM from the recording)\n", g_ss22_game->tag, path);
+    return true;
+}
+static const char *rec_path, *rep_path;
 static const char *start_name;                       /* --stage NAME (the game's start script, ss22_game.start) */
 static bool start_on;                                /* the start script owns the cabinet this frame: the window's keys stay out of it */
 static void update_inputs(void)
 {
+    if (rep_f) {                                         /* --replay: the recorded values, at the recorded frames */
+        while (rep_have && rep_ev.f <= rr_frame) {
+            g_ss22_gun_x = (uint16_t)rep_ev.gx; g_ss22_gun_y = (uint16_t)rep_ev.gy; g_ss22_gun_off = rep_ev.goff != 0;
+            ss22_snd_inputs((uint16_t)rep_ev.p, rep_ev.w, rep_ev.p1, rep_ev.p2);
+            rep_read();
+        }
+        return;
+    }
     if (start_name && g_ss22_game->start) {
         uint16_t p = 0; unsigned wheel = 0x200, pedal1 = 0, pedal2 = 0;
         start_on = g_ss22_game->start(start_name, (long)rr_frame, &p, &wheel, &pedal1, &pedal2);
@@ -357,7 +404,7 @@ void rr_tick(void)
 
 /* the window's host: the game's name, settings file and cabinet controls (engine/ss22_host.c) */
 static void in_init(void) { ss22_input_init(g_ss22_game->input); }
-static void in_update(void) { if (!start_on && !autoplay) ss22_input_update(); }      /* the start script has the cabinet until it is over; --autoplay's script keeps it (else the window's idle keyboard overwrites it every frame) */
+static void in_update(void) { if (!start_on && !autoplay && !rep_f) ss22_input_update(); }      /* the start script has the cabinet until it is over; --autoplay's script keeps it (else the window's idle keyboard overwrites it every frame) */
 static ss22_host_game host_game;
 
 int ss22_main(int argc, char **argv, const ss22_game *g)
@@ -392,6 +439,8 @@ int ss22_main(int argc, char **argv, const ss22_game *g)
         else if (!strcmp(argv[i], "--dump-every") && i + 1 < argc) { dump_every = (uint32_t)atoi(argv[++i]); dump_wram_only = 1; }
         else if (!strcmp(argv[i], "--dsp-steps") && i + 1 < argc) dsp_steps_per_frame = atol(argv[++i]);
         else if (!strcmp(argv[i], "--autoplay")) autoplay = 1;
+        else if (!strcmp(argv[i], "--record") && i + 1 < argc) rec_path = argv[++i];
+        else if (!strcmp(argv[i], "--replay") && i + 1 < argc) rep_path = argv[++i];
         else if (!strcmp(argv[i], "--stage") && i + 1 < argc) {           /* the game's start script: coins, this stage, the car; then the player */
             start_name = argv[++i];
             if (!g->start) { fprintf(stderr, "[%s] %s has no --stage\n", g->tag, g->name); return 2; }
@@ -439,6 +488,10 @@ int ss22_main(int argc, char **argv, const ss22_game *g)
     if (!ss22_load_program(rom_dir)) return 2;
     ss22_hw_init(rom_dir);
     if (win_scale) ss22_eeprom_persist(nvfile);         /* a player's session keeps its options and records; headless runs (the gates) never do */
+    if (rep_path && !rep_open(rep_path)) return 2;       /* the recording's EEPROM replaces whatever was loaded */
+    static char last_rec[80];                            /* a played session always keeps its latest recording: a crash can be replayed afterwards */
+    if (win_scale && !rec_path && !rep_path) { snprintf(last_rec, sizeof last_rec, "%s_last.rec", g->lname); rec_path = last_rec; }
+    if (rec_path) rec_open(rec_path);
     if (!ss22_dsp_init(rom_dir)) return 2;
     if (!ss22_snd_init(rom_dir)) fprintf(stderr, "[%s] no sound MCU: the game will read no inputs\n", g->tag);
     ss22_env_init(getenv(envname));                     /* dev trace build only */

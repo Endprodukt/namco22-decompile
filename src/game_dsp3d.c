@@ -1501,11 +1501,27 @@ void sound_play_p_ungated(undefined4 param_1)
  * never ran halts the driver with "no translation for this address". Run propcycl_sndoracle with this and SND_COV
  * to grow the coverage from every command the game can send -- what a scripted flight cannot reach. */
 int g_sndsweep_hold;
+/* PROPCYCL_SNDRAND=<seed>: random commands and parameters straight into the MCU mailbox (4 slots every 6 frames after frame 1000, parameter words
+ * 0x100..0x17E at random) -- the engine's `--sndsweep` PASS >= 5 for this board (tools/grind_snd.sh). Commands the game's own sound table never
+ * sends still reach the driver, which is what finds the (address, M/X) pairs no play reaches. Test harness only, for propcycl_sndoracle + SND_COV. */
+int g_sndrand;
+static uint32_t sndrand_next(uint64_t *s) { *s ^= *s << 13; *s ^= *s >> 7; *s ^= *s << 17; return (uint32_t)(*s >> 16); }
 void snd_sweep_tick(void)
 {
   static int n = -1, prev = -1;
   static unsigned frames;
   const int nid = 0x59, npar = 5;
+  if (g_sndrand > 0) {
+    static unsigned fr; static uint64_t rs; int i; unsigned o;
+    if (!rs) rs = 0x9E3779B97F4A7C15ull * (uint64_t)g_sndrand;
+    if (++fr < 1000 || (fr - 1000) % 6) return;
+    for (i = 0; i < 4; i++) {
+      uint32_t sl = sndrand_next(&rs) % 32, on = sndrand_next(&rs), fl = sndrand_next(&rs), c = sndrand_next(&rs) % 0x80;
+      comms_w16(g_sys.commsram, sl * 2, (on & 3) ? (((fl & 1) ? 0xC000u : 0x4000u) | c) : 0);
+    }
+    for (o = 0x100; o < 0x180; o += 2) { uint32_t v = sndrand_next(&rs); if (v & 1) comms_w16(g_sys.commsram, o, (v >> 1) & 0xFFFF); }
+    return;
+  }
   if (g_sndsweep_hold <= 0) return;
   if (++frames < 1000) return;
   if ((frames - 1000) % (unsigned)g_sndsweep_hold) return;
